@@ -68,7 +68,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -109,6 +109,10 @@ app.include_router(agent.router,      prefix=API_PREFIX, tags=["Gemma AI Agent"]
 import os
 os.makedirs("evidence/annotated", exist_ok=True)
 app.mount("/evidence", StaticFiles(directory="evidence"), name="evidence")
+
+# Serve test folder as static files
+os.makedirs("test", exist_ok=True)
+app.mount("/test-images", StaticFiles(directory="test"), name="test-images")
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,31 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # ---------------------------------------------------------------------------
+# Violation type normalization
+# ---------------------------------------------------------------------------
+# The ML classifier (ml/pipeline/violation_classifier.py) emits snake_case
+# enum values (e.g. "red_light_violation"). All other ingestion paths
+# (public reports, debug injection) use the human-readable display form.
+# Normalize here so every record in the DB uses one consistent label,
+# regardless of which path produced it.
+VIOLATION_TYPE_DISPLAY_MAP = {
+    "helmet_non_compliance":   "No Helmet",
+    "seatbelt_non_compliance": "Seatbelt",
+    "triple_riding":           "Triple Riding",
+    "wrong_side_driving":      "Wrong Way",
+    "stop_line_violation":     "Stop Line",
+    "red_light_violation":     "Red Light",
+    "illegal_parking":         "Illegal Parking",
+    "phone_use_while_driving": "Phone Use",
+    "drowsy_driving":          "Drowsy",
+}
+
+
+def normalize_violation_type(raw_type: str) -> str:
+    return VIOLATION_TYPE_DISPLAY_MAP.get(raw_type, raw_type)
+
+
+# ---------------------------------------------------------------------------
 # Engine + session factory
 # ---------------------------------------------------------------------------
 
@@ -195,12 +220,13 @@ async def get_db():
 # ---------------------------------------------------------------------------
 
 async def save_violation(session: AsyncSession, record: Dict) -> ViolationModel:
+    raw_type = record.get("violations", [{}])[0].get("type", "") if record.get("violations") else ""
     obj = ViolationModel(
         id             = record["violation_id"],
         camera_id      = record.get("camera", {}).get("id", ""),
         location       = record.get("camera", {}).get("location", ""),
         timestamp      = record.get("timestamp", datetime.utcnow().isoformat()),
-        violation_type = record.get("violations", [{}])[0].get("type", "") if record.get("violations") else "",
+        violation_type = normalize_violation_type(raw_type),
         confidence     = record.get("violations", [{}])[0].get("confidence", 0.0) if record.get("violations") else 0.0,
         severity       = record.get("violations", [{}])[0].get("severity", "") if record.get("violations") else "",
         tier           = record.get("tier", 3),

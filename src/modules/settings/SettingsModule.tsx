@@ -4,45 +4,17 @@ import React, { useState } from "react";
 import { usePlatform, UserRole } from "@/context/PlatformContext";
 import { SettingsIcon, UserIcon, ShieldIcon, CheckIcon, CloseIcon } from "@/components/Icons";
 
-interface UserRecord {
-  id: string;
-  name: string;
-  role: UserRole;
-  email: string;
-  status: "Active" | "Inactive";
-  lastLogin: string;
-}
-
 export default function SettingsModule() {
-  const { 
-    role: activeUserRole, 
-    setRole, 
-    isSimulating, 
-    setIsSimulating, 
-    simulationInterval, 
-    setSimulationInterval,
+  const {
+    role: activeUserRole,
+    setRole,
+    user: currentUser,
     usersList,
-    auditLogs: backendAuditLogs,
+    auditLogs,
     updateUserRole
   } = usePlatform();
 
-  // Fallbacks in case API is offline
-  const initialUsers: UserRecord[] = [
-    { id: "USR-001", name: "Officer Keshav", role: "Admin", email: "keshav@enforcement.gov", status: "Active", lastLogin: "Today, 09:44 AM" },
-    { id: "USR-002", name: "Analyst Priya", role: "Reviewer", email: "priya@enforcement.gov", status: "Active", lastLogin: "Today, 08:30 AM" },
-    { id: "USR-003", name: "Supervisor Sanjay", role: "Supervisor", email: "sanjay@enforcement.gov", status: "Active", lastLogin: "Yesterday, 04:12 PM" },
-    { id: "USR-004", name: "Operator Amit", role: "Operator", email: "amit@controlroom.gov", status: "Active", lastLogin: "Today, 06:15 AM" }
-  ];
-
-  const initialLogs = [
-    { time: "2026-06-20T09:50:22Z", actor: "Officer Keshav", action: "CAMERA_REGISTERED", target: "CAM-101", details: "RTSP connection endpoint registered successfully" },
-    { time: "2026-06-20T09:42:15Z", actor: "Supervisor Sanjay", action: "CITATION_APPROVED", target: "VIO-20260620-002", details: "Speed limit citation validated. License plate 9KX-452" },
-    { time: "2026-06-20T09:30:10Z", actor: "Officer Keshav", action: "ROLE_PERMISSION_MODIFIED", target: "Operator", details: "Write access granted for batch uploads list" },
-    { time: "2026-06-20T08:12:04Z", actor: "System Agent", action: "INFERENCE_FAILURE_RESOLVED", target: "YOLO Pipeline", details: "Memory leak cleared on GPU core #2" }
-  ];
-
-  const users = usersList && usersList.length > 0 ? usersList : initialUsers;
-  const auditLogs = backendAuditLogs && backendAuditLogs.length > 0 ? backendAuditLogs : initialLogs;
+  const users = usersList;
 
   // Role permissions checklist structure
   const [permissionsMatrix, setPermissionsMatrix] = useState({
@@ -81,7 +53,7 @@ export default function SettingsModule() {
       <div>
         <h1 style={{ fontSize: "20px", fontWeight: "700", letterSpacing: "-0.5px" }}>SYSTEM ADMINISTRATION & PRIVILEGES</h1>
         <p style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginTop: "2px" }}>
-          Configure security roles, audit user decisions, view compliance system logs and toggle edge simulators
+          Configure security roles, audit user decisions, and view compliance system logs
         </p>
       </div>
 
@@ -125,7 +97,7 @@ export default function SettingsModule() {
                         <select 
                           value={u.role}
                           onChange={(e) => handleRoleToggle(u.id, e.target.value as UserRole)}
-                          disabled={!isAdmin || u.id === "USR-001"}
+                          disabled={!isAdmin || u.id === currentUser?.id}
                           style={{
                             padding: "2px 4px",
                             fontSize: "10px",
@@ -144,56 +116,6 @@ export default function SettingsModule() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          </div>
-
-          {/* Simulator configurations */}
-          <div className="card" style={{ borderLeft: "3px solid var(--border-accent-dark)" }}>
-            <div className="card-title">
-              <span>REAL-TIME SIMULATION SPEED CONTROLLER</span>
-              <span className="pulse-green"></span>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <span style={{ fontWeight: "600", fontSize: "12px" }}>Background Generator</span>
-                  <p style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "2px" }}>
-                    Simulates cars passing cameras and triggers traffic violation events.
-                  </p>
-                </div>
-                <div>
-                  <button 
-                    onClick={() => setIsSimulating(!isSimulating)}
-                    className={`btn btn-sm ${isSimulating ? "btn-success" : "btn-danger"}`}
-                    style={{ fontWeight: "bold" }}
-                  >
-                    {isSimulating ? "SIMULATION RUNNING" : "SIMULATION PAUSED"}
-                  </button>
-                </div>
-              </div>
-
-              {isSimulating && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
-                    <span>Violation Spawning Frequency:</span>
-                    <strong className="mono">{simulationInterval / 1000} seconds</strong>
-                  </div>
-                  <input 
-                    type="range"
-                    min="3000"
-                    max="30000"
-                    step="1000"
-                    value={simulationInterval}
-                    onChange={(e) => setSimulationInterval(parseInt(e.target.value))}
-                    style={{ cursor: "pointer", accentColor: "var(--border-accent-dark)" }}
-                  />
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", color: "var(--text-muted)" }}>
-                    <span>FAST (3s)</span>
-                    <span>SLOW (30s)</span>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 

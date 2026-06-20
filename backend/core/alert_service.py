@@ -125,11 +125,19 @@ class AlertService:
                     to=f"whatsapp:{phone}",
                 )
             else:
-                msg = self._twilio_client.messages.create(
-                    body=message[:160],  # SMS limit
-                    from_=settings.TWILIO_FROM_NUMBER,
-                    to=phone,
-                )
+                from_num = settings.TWILIO_FROM_NUMBER
+                if from_num.startswith("MG"):
+                    msg = self._twilio_client.messages.create(
+                        body=message[:160],  # SMS limit
+                        messaging_service_sid=from_num,
+                        to=phone,
+                    )
+                else:
+                    msg = self._twilio_client.messages.create(
+                        body=message[:160],  # SMS limit
+                        from_=from_num,
+                        to=phone,
+                    )
             logger.info("Alert sent via Twilio to %s | SID: %s", phone, msg.sid)
             return {"phone": phone, "status": "sent", "sid": msg.sid}
         except Exception as e:
