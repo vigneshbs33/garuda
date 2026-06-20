@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core.config import get_settings
 from .core.database import init_db, close_db
-from .api import violations, cameras, vehicles, analytics, stream, debug
+from .api import violations, cameras, vehicles, analytics, stream, debug, auth, jobs, reviews, evidence, users, audit_logs, agent
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -97,6 +97,13 @@ app.include_router(vehicles.router,   prefix=API_PREFIX, tags=["Vehicles"])
 app.include_router(analytics.router,  prefix=API_PREFIX, tags=["Analytics"])
 app.include_router(stream.router,     prefix="",         tags=["Live Feed"])
 app.include_router(debug.router,      prefix="/debug",   tags=["Debug"])
+app.include_router(auth.router,       prefix=API_PREFIX, tags=["Authentication"])
+app.include_router(jobs.router,       prefix=API_PREFIX, tags=["Jobs"])
+app.include_router(reviews.router,    prefix=API_PREFIX, tags=["Reviews"])
+app.include_router(evidence.router,   prefix=API_PREFIX, tags=["Evidence"])
+app.include_router(users.router,      prefix=API_PREFIX, tags=["Users"])
+app.include_router(audit_logs.router, prefix=API_PREFIX, tags=["Audit Logs"])
+app.include_router(agent.router,      prefix=API_PREFIX, tags=["Gemma AI Agent"])
 
 # Serve evidence images as static files
 import os

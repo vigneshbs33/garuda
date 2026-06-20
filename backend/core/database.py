@@ -100,6 +100,45 @@ class VehicleModel(Base):
     state_code         : Mapped[str]  = mapped_column(String, default="")
 
 
+class UserModel(Base):
+    __tablename__ = "users"
+
+    id                 : Mapped[str]  = mapped_column(String, primary_key=True)
+    name               : Mapped[str]  = mapped_column(String)
+    role               : Mapped[str]  = mapped_column(String, default="Operator")
+    email              : Mapped[str]  = mapped_column(String, default="")
+    status             : Mapped[str]  = mapped_column(String, default="Active")
+    last_login         : Mapped[str]  = mapped_column(String, default="")
+    password_hash      : Mapped[str]  = mapped_column(String, default="")
+    is_verified        : Mapped[bool] = mapped_column(Boolean, default=False)
+    verification_token : Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+
+
+class JobModel(Base):
+    __tablename__ = "processing_jobs"
+
+    id               : Mapped[str]   = mapped_column(String, primary_key=True)
+    name             : Mapped[str]   = mapped_column(String)
+    source_type      : Mapped[str]   = mapped_column(String, default="Video")
+    progress         : Mapped[int]   = mapped_column(Integer, default=0)
+    status           : Mapped[str]   = mapped_column(String, default="Queued")
+    duration         : Mapped[int]   = mapped_column(Integer, default=0)
+    frames_processed : Mapped[int]   = mapped_column(Integer, default=0)
+    violations_found : Mapped[int]   = mapped_column(Integer, default=0)
+    upload_time      : Mapped[str]   = mapped_column(String, default=lambda: datetime.utcnow().isoformat() + "Z")
+
+
+class AuditLogModel(Base):
+    __tablename__ = "audit_logs"
+
+    id        : Mapped[int]  = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp : Mapped[str]  = mapped_column(String, default=lambda: datetime.utcnow().isoformat() + "Z")
+    actor     : Mapped[str]  = mapped_column(String)
+    action    : Mapped[str]  = mapped_column(String)
+    target    : Mapped[str]  = mapped_column(String)
+    details   : Mapped[str]  = mapped_column(String, default="")
+
+
 # ---------------------------------------------------------------------------
 # Init / teardown
 # ---------------------------------------------------------------------------
@@ -109,6 +148,25 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database initialised: %s", settings.DATABASE_URL)
+
+    # Seed default users
+    from .auth_utils import hash_password
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
+        # Check if users already exist
+        result = await session.execute(select(UserModel))
+        users = result.scalars().all()
+        if not users:
+            logger.info("Seeding default users database...")
+            default_users = [
+                UserModel(id="USR-001", name="Officer Keshav", role="Admin", email="keshav@enforcement.gov", status="Active", password_hash=hash_password("admin123"), is_verified=True),
+                UserModel(id="USR-002", name="Analyst Priya", role="Reviewer", email="priya@enforcement.gov", status="Active", password_hash=hash_password("priya123"), is_verified=True),
+                UserModel(id="USR-003", name="Supervisor Sanjay", role="Supervisor", email="sanjay@enforcement.gov", status="Active", password_hash=hash_password("sanjay123"), is_verified=True),
+                UserModel(id="USR-004", name="Operator Amit", role="Operator", email="amit@controlroom.gov", status="Active", password_hash=hash_password("amit123"), is_verified=True),
+            ]
+            session.add_all(default_users)
+            await session.commit()
+            logger.info("Default users seeded successfully.")
 
 
 async def close_db() -> None:

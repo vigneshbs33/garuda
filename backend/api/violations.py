@@ -188,6 +188,19 @@ async def confirm_violation(
     if obj.plate_text:
         await upsert_vehicle(db, obj.plate_text, obj.violation_type)
 
+    # Save to audit log
+    from ..core.database import AuditLogModel
+    from datetime import datetime
+    log = AuditLogModel(
+        timestamp=datetime.utcnow().isoformat() + "Z",
+        actor=body.officer_id,
+        action="CITATION_APPROVED",
+        target=violation_id,
+        details=body.notes or f"Violation approved and citation confirmed. Plate: {obj.plate_text}"
+    )
+    db.add(log)
+    await db.commit()
+
     logger.info("Violation CONFIRMED: %s by %s", violation_id, body.officer_id)
     return OfficerActionResponse(
         violation_id = violation_id,
@@ -212,6 +225,19 @@ async def reject_violation(
     if not obj:
         raise HTTPException(status_code=404, detail="Violation not found")
 
+    # Save to audit log
+    from ..core.database import AuditLogModel
+    from datetime import datetime
+    log = AuditLogModel(
+        timestamp=datetime.utcnow().isoformat() + "Z",
+        actor=body.officer_id,
+        action="CITATION_REJECTED",
+        target=violation_id,
+        details=body.notes or f"Violation rejected as false positive. Plate: {obj.plate_text or 'unclear'}"
+    )
+    db.add(log)
+    await db.commit()
+
     logger.info("Violation REJECTED (false positive): %s by %s", violation_id, body.officer_id)
     return OfficerActionResponse(
         violation_id = violation_id,
@@ -229,3 +255,112 @@ async def reject_violation(
 async def get_violation_image(violation_id: str):
     """Redirect to the annotated evidence image"""
     return RedirectResponse(url=f"/evidence/annotated/{violation_id}.jpg")
+
+
+# ---------------------------------------------------------------------------
+# Public Submission Endpoint
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel
+
+class PublicViolationReport(BaseModel):
+    violation_id    : str
+    violation_type  : str
+    plate_text      : str
+    location        : str
+    severity        : str = "medium"
+    frame_b64       : Optional[str] = None
+
+
+@router.post("/violations/public-report", status_code=201)
+async def public_report_violation(
+    body: PublicViolationReport,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Submits a violation reported from the public portal.
+    Decodes the frame image, saves it to disk, and inserts the record in the database.
+    """
+    from datetime import datetime
+    import base64
+    import os
+
+    annotated_url = ""
+    if body.frame_b64:
+        b64_data = body.frame_b64
+        if "," in b64_data:
+            b64_data = b64_data.split(",", 1)[1]
+        
+        try:
+            img_data = base64.b64decode(b64_data)
+            os.makedirs("evidence/annotated", exist_ok=True)
+            file_path = f"evidence/annotated/{body.violation_id}.jpg"
+            with open(file_path, "wb") as f:
+                f.write(img_data)
+            annotated_url = f"/evidence/annotated/{body.violation_id}.jpg"
+        except Exception as e:
+            logger.error("Failed to save public uploaded frame: %s", e)
+
+    record = {
+        "violation_id": body.violation_id,
+        "tier": 2,
+        "action": "HUMAN_REVIEW",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "camera": {
+            "id": "PUBLIC-REPORT",
+            "location": body.location or "Public Submission",
+            "coordinates": {}
+        },
+        "vehicle": {
+            "vehicle_class": "car",
+            "color": "unknown",
+            "license_plate": body.plate_text.upper().strip(),
+            "plate_confidence": 1.0,
+            "plate_valid": True,
+            "plate_state": "",
+            "repeat_offender": False,
+            "prior_violations": 0,
+        },
+        "violations": [{
+            "type": body.violation_type,
+            "confidence": 1.0,
+            "severity": body.severity,
+            "fine_amount_inr": 1000,
+            "bbox": [],
+            "metadata": {"source": "public_report"},
+        }],
+        "driver_state": {"alerts": [], "total_alerts": 0},
+        "evidence": {
+            "annotated_image": annotated_url,
+            "raw_frame": annotated_url
+        },
+    }
+
+    # Save to DB
+    obj = await save_violation(db, record)
+
+    # Update vehicle registry
+    plate = body.plate_text.upper().strip()
+    if plate:
+        await upsert_vehicle(
+            db, plate,
+            body.violation_type,
+            "",
+        )
+
+    # WebSocket broadcast to main feed so operators see it in real-time
+    await broadcast_violation({
+        "event"               : "violation_detected",
+        "violation_id"        : body.violation_id,
+        "violation_type"      : body.violation_type,
+        "confidence"          : 100.0,
+        "tier"                : 2,
+        "plate"               : plate,
+        "camera_id"           : "PUBLIC-REPORT",
+        "location"            : body.location or "Public Submission",
+        "timestamp"           : record["timestamp"],
+        "severity"            : body.severity,
+        "annotated_image_url" : annotated_url,
+    })
+
+    logger.info("Public violation reported: %s | %s", body.violation_id, body.violation_type)
+    return {"violation_id": body.violation_id, "status": obj.status}

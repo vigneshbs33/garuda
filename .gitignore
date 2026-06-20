@@ -21,3 +21,16 @@ test_assets/
 # OS
 .DS_Store
 Thumbs.db
+
+# Next.js / Node
+node_modules/
+.next/
+
+# Local databases
+*.db
+garuda.db
+
+# SSL certs
+*.pem
+key.pem
+cert.pem

@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     # Camera heartbeat (seconds between expected updates)
     CAMERA_TIMEOUT_SEC: int = 30
 
+    # SMTP Email Settings (for real verification)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_USE_TLS: bool = True
+
     @property
     def officer_phone_list(self) -> List[str]:
         return [p.strip() for p in self.OFFICER_PHONES.split(",") if p.strip()]
