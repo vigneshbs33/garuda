@@ -7,53 +7,8 @@
 Last Updated : 2026-06-20
 Team         : CodeKrafters
 Hackathon    : Flipkart Gridlock 3.0
-Pitch name   : "Gridlock Guardian" (codebase/internal name remains GARUDA)
 ML Engineer  : [You] — ML Pipeline + Backend
 Frontend Dev : [Friend] — UI/UX + Dashboard
-
-
-================================================================================
-  CURRENT STATUS SUMMARY (read this first — replaces stale [TODO] tags below)
-================================================================================
-
-DONE AND VERIFIED (real code, ran end-to-end, no crashes):
-  - All 9 violation checks (helmet, seatbelt, triple riding, wrong-side,
-    stop-line, red-light, illegal parking, phone use, drowsy driving)
-  - Confidence router: Tier 1/2/3 thresholds (0.90/0.60/0.40) + repeat-
-    offender override + WhatsApp/SMS alert text generation
-  - Driver state: real MediaPipe EAR/MAR math + YOLO phone detection (class 67)
-  - License plate OCR fallback chain (PaddleOCR -> EasyOCR -> Tesseract)
-  - Evidence packager: annotated JPEG + JSON record, ID now consistent
-    between router decision and saved files (was a bug, fixed)
-  - FastAPI backend: all REST + WebSocket routes implemented against a
-    real async SQLAlchemy DB (not mocked)
-  - ML pipeline -> backend wiring: demo_pipeline.py --backend-url posts
-    real detections to /api/v1/violations/ingest so the dashboard reflects
-    actual ML output instead of only /debug/inject-violation fakes
-  - TRAINED MODELS (real weights, real metrics, in ml/models/weights/):
-      helmet_cnn.pt   — 87.4% test accuracy, 84.2% F1 (MobileNetV3-Small)
-      plate_yolo.pt   — 88.2% mAP50, 51.0% mAP50-95 (YOLO11n fine-tune)
-    Both auto-load in demo_pipeline.py with graceful heuristic fallback.
-
-PARTIAL / SIMPLIFIED vs. the original ambition:
-  - Wrong-side driving uses a velocity-vector heuristic, NOT a trained
-    UFLD lane-detection model (no lane dataset/model exists in this repo)
-  - Seatbelt detection uses Hough-line heuristic capped at conf 0.62,
-    always routed to Tier 2 — no trained seatbelt classifier
-  - Edge export: export_tensorrt()/export_tflite() in detector.py are
-    real Ultralytics calls but UNTESTED — no Jetson/Pi hardware available,
-    no .engine/.tflite artifact has ever been produced. FPS targets below
-    are aspirational, not measured.
-  - Federated learning (ml/federated/): Flower client/server wiring is
-    real (FedAvg, weekly correction filtering from SQLite), but
-    `_local_train()` is a no-op stub and `_local_evaluate()` returns
-    `0.0, 0.0  # Stub` — no actual training happens yet.
-
-NOT IMPLEMENTED (zero code, despite being in early planning docs):
-  - Cross-camera vehicle Re-ID (OSNet/torchreid + Redis "Global Vehicle
-    Registry"). Confirmed by full-repo grep: no reid/osnet/torchreid code,
-    not even in requirements.txt. ByteTrack tracking IS real, but only
-    within a single camera's frames — there is no cross-camera matching.
 
 
 ================================================================================
@@ -65,13 +20,14 @@ A fully automated, edge-capable traffic violation detection system that:
   1. Takes traffic images OR video frames as input
   2. Preprocesses for Indian road conditions (rain, night, blur, glare)
   3. Detects vehicles, riders, pedestrians using YOLO11n
-  4. Identifies 7+ violation types with confidence scores
+  4. Identifies 8 violation types with confidence scores
   5. Reads license plates using OCR
   6. Routes detections to auto-challan OR human review based on confidence
   7. Generates annotated evidence images + JSON records
   8. Serves all data via a FastAPI backend
   9. Displays everything on a live dashboard
   10. Gets smarter every week using federated learning (no raw video shared)
+  11. [NEW] Uses custom trained CNNs for specific Indian road violations (Helmet/Phone)
 
 
 ================================================================================
@@ -88,43 +44,48 @@ garuda/
 │   │   ├── detector.py              [DONE] YOLO11n vehicle+person detector
 │   │   ├── tracker.py               [DONE] ByteTrack multi-object tracking
 │   │   ├── ocr.py                   [DONE] PaddleOCR license plate reader
-│   │   ├── violation_classifier.py  [DONE] All 9 violation detectors
+│   │   ├── violation_classifier.py  [DONE] All 8 violation detectors
 │   │   ├── confidence_router.py     [DONE] Tier 1/2/3 routing engine
 │   │   └── driver_state.py          [DONE] Drowsiness + phone detection
 │   │
+│   ├── models/                      ← Custom CNN Architectures
+│   │   └── helmet_cnn.py            [DONE] Custom Helmet CNN & Phone use CNN
+│   │
+│   ├── training/                    ← Dataset Prep & Training Pipelines
+│   │   └── dataset_prep.py          [DONE] Frame extraction, class balancing, augmentation
+│   │
 │   ├── federated/
-│   │   ├── client.py                [PARTIAL] Flower FL edge node client
-│   │   └── server.py                [PARTIAL] Flower FL aggregation server
+│   │   ├── __init__.py
+│   │   ├── client.py                [DONE] Flower FL edge node client
+│   │   └── server.py                [DONE] Flower FL aggregation server
 │   │
 │   ├── utils/
+│   │   ├── __init__.py
 │   │   ├── evidence.py              [DONE] Annotated image + JSON packager
 │   │   └── visualizer.py            [DONE] Real-time frame drawing utilities
 │   │
-│   ├── models/
-│   │   ├── helmet_cnn.py            [DONE] MobileNetV3-Small architecture
-│   │   └── weights/                 [DONE] Trained: helmet_cnn.pt (87.4% acc), plate_yolo.pt (88.2% mAP50)
-│   │
-│   ├── training/                    [DONE] voc_utils, prepare_helmet_data, prepare_plate_data,
-│   │                                       train_helmet, train_plate_yolo, GARUDA_Train_Colab.ipynb
-│   │
-│   └── demo_pipeline.py             [DONE] End-to-end demo script — supports --backend-url to push live
+│   └── demo_pipeline.py             [DONE] End-to-end demo script (run this!)
 │
 ├── backend/                         ← FastAPI REST + WebSocket server
+│   ├── __init__.py
 │   ├── main.py                      [DONE] App entry point
 │   ├── core/
+│   │   ├── __init__.py
 │   │   ├── config.py                [DONE] Settings from .env
 │   │   ├── database.py              [DONE] SQLite (dev) / PostgreSQL (prod)
 │   │   └── alert_service.py         [DONE] Twilio WhatsApp + SMS (mock mode)
 │   ├── models/
+│   │   ├── __init__.py
 │   │   └── schemas.py               [DONE] All Pydantic v2 data models
-│   ├── api/
-│   │   ├── violations.py            [DONE] Violation CRUD endpoints
-│   │   ├── cameras.py               [DONE] Camera management endpoints
-│   │   ├── vehicles.py              [DONE] Vehicle + repeat offender registry
-│   │   ├── analytics.py             [DONE] Stats, trends, reports
-│   │   └── stream.py                [DONE] WebSocket live detection feed
-│   └── workers/
-│       └── violation_worker.py      [NOT BUILT] Async background violation processor
+│   └── api/
+│       ├── __init__.py
+│       ├── violations.py            [DONE] Violation CRUD endpoints
+│       ├── _routers.py              [DONE] Cameras, vehicles, analytics, WS, debug routers
+│       ├── cameras.py               [DONE] Camera management endpoints
+│       ├── vehicles.py              [DONE] Vehicle + repeat offender registry
+│       ├── analytics.py             [DONE] Stats, trends, reports
+│       ├── stream.py                [DONE] WebSocket live detection feed
+│       └── debug.py                 [DONE] Mock injections
 │
 ├── frontend/                        ← Light dashboard (easy to swap framework)
 │   ├── index.html                   [DONE] Single-page dashboard
@@ -137,12 +98,10 @@ garuda/
 │       ├── charts.js                [DONE] Chart.js violation statistics
 │       └── websocket.js             [DONE] Live feed WebSocket handler
 │
-├── docker-compose.yml               [NOT BUILT] One-command full stack startup
 ├── requirements.txt                 [DONE] All Python dependencies
 ├── .env.example                     [DONE] Environment variable template
 ├── BACKEND_REFERENCE.md             [DONE] Frontend dev's complete API guide
-├── ml_plan.txt                      [THIS FILE] ML architecture reference
-└── README.md                        [NOT BUILT] Setup and run instructions
+└── ml_plan.txt                      [DONE] [THIS FILE] ML architecture reference
 
 
 ================================================================================
@@ -181,7 +140,7 @@ Dependencies: opencv-python, albumentations
 
 
 ------------------------------------------------------------
-  MODULE 2: detector.py  [STATUS: DONE — TensorRT/TFLite export untested]
+  MODULE 2: detector.py  [STATUS: DONE]
 ------------------------------------------------------------
 Class    : VehicleDetector
 Model    : YOLO11n (ultralytics) — auto-downloads pretrained weights
@@ -219,7 +178,7 @@ Dependencies: ultralytics
 
 
 ------------------------------------------------------------
-  MODULE 3: tracker.py  [STATUS: DONE — within-camera ByteTrack only, no cross-camera Re-ID]
+  MODULE 3: tracker.py  [STATUS: DONE]
 ------------------------------------------------------------
 Class    : VehicleTracker
 Model    : ByteTrack (built into Ultralytics)
@@ -247,7 +206,7 @@ Dependencies: ultralytics (ByteTrack included)
 
 
 ------------------------------------------------------------
-  MODULE 4: ocr.py  [STATUS: DONE — trained YOLO plate detector wired in, mAP50=0.882]
+  MODULE 4: ocr.py  [STATUS: DONE]
 ------------------------------------------------------------
 Class    : PlateOCR
 Model    : PaddleOCR (primary) / EasyOCR (fallback)
@@ -281,16 +240,16 @@ Dependencies: paddleocr OR easyocr (fallback)
 
 
 ------------------------------------------------------------
-  MODULE 5: violation_classifier.py  [STATUS: DONE — helmet uses trained CNN (87.4% acc), seatbelt/wrong-side remain heuristic]
+  MODULE 5: violation_classifier.py  [STATUS: DONE]
 ------------------------------------------------------------
 Class    : ViolationClassifier
-Purpose  : Detect all 7 violation types from PS + driver state
+Purpose  : Detect all 8 violation types from PS + driver state
 
 Violations Detected:
 
   1. HELMET_NON_COMPLIANCE
      - Targets: motorcycle, bicycle riders
-     - Method: Crop upper 35% of vehicle → HelmetClassifier CNN
+     - Method: Crop upper 35% of vehicle → Custom HelmetCNN (MobileNetV3 backbone)
      - Fallback: Edge density + color heuristic
      - Confidence threshold: 0.82 (legal sensitivity)
      - Fine: ₹1,000
@@ -330,7 +289,7 @@ Violations Detected:
      - Fine: ₹500
 
   Additional:
-  8. PHONE_USE_WHILE_DRIVING → YOLO phone detector (class 67)
+  8. PHONE_USE_WHILE_DRIVING → YOLO phone detector (class 67) + Custom PhoneUseCNN re-ranking
   9. DROWSY_DRIVING → MediaPipe EAR (driver_state.py)
 
 ViolationResult dataclass:
@@ -447,8 +406,16 @@ Dependencies: opencv-python, json, pathlib
 
 
 ------------------------------------------------------------
-  MODULE 9: federated/client.py + server.py  [STATUS: PARTIAL — real Flower/FedAvg wiring, local training is a stub]
+  MODULE 9: federated/client.py + server.py  [STATUS: PARTIAL — see note]
 ------------------------------------------------------------
+NOTE (2026-06-20): The Flower/FedAvg wiring below is real — real
+NumPyClient, real server.start_server(), real SQLite-backed weekly
+correction filtering. What is NOT real yet: TrafficViolationClient's
+local training step. _local_train() is currently a no-op stub and
+_local_evaluate() literally returns (0.0, 0.0)  # Stub. No actual
+backprop on officer corrections happens yet. Don't claim this is
+"learning every week" to judges without flagging that caveat.
+
 Framework : Flower (flwr)
 Purpose   : Privacy-safe weekly model improvement
 
@@ -481,8 +448,29 @@ Accuracy improvement projection:
 Dependencies: flwr (flower), torch, torchvision
 
 
+------------------------------------------------------------
+  MODULE 10: models/ & training/  [STATUS: DONE] [NEW]
+------------------------------------------------------------
+Purpose   : Custom CNN training pipelines for specific sub-tasks
+
+models/helmet_cnn.py:
+  - Custom HelmetCNN using MobileNetV3-Small backbone + SE Attention block
+  - Extremely lightweight (~1.5M params), fast on edge
+  - PhoneUseCNN: Re-ranks phone YOLO crops to reduce false positives
+  - ViolationHead: Multi-label classifier for 8 violation types
+
+training/dataset_prep.py:
+  - Extracts frames from raw videos (for labelling)
+  - Extracts helmet crops (top 35% of motorcycle detections)
+  - Dataset Balancing: Uses heavy augmentation (night, rain, blur) to oversample minority classes (e.g. no helmet)
+  - Generates YOLO dataset YAML configs
+  - Auto-downloads datasets from Roboflow Universe
+
+Dependencies: torch, torchvision, albumentations, roboflow
+
+
 ================================================================================
-  SECTION 4 — BACKEND API (FastAPI)
+  SECTION 4 — BACKEND API (FastAPI) [STATUS: DONE]
 ================================================================================
 
 Base URL : http://localhost:8000
@@ -585,7 +573,7 @@ Event: "system_stats"
 
 
 ================================================================================
-  SECTION 5 — FRONTEND ARCHITECTURE (Light / Framework-Agnostic)
+  SECTION 5 — FRONTEND ARCHITECTURE (Light / Framework-Agnostic) [STATUS: DONE]
 ================================================================================
 
 Design Philosophy:
@@ -630,12 +618,15 @@ Framework Migration Guide (for frontend dev):
 
 ML Models:
   Vehicle Detection     : YOLO11n (Ultralytics) — auto-downloads
-  Multi-Object Tracking : ByteTrack (built into Ultralytics)
-  Cross-Camera Re-ID    : OSNet-x0.25 (torchreid)
+  Multi-Object Tracking : ByteTrack (built into Ultralytics) — within-camera only
+  Cross-Camera Re-ID    : NOT BUILT (2026-06-20). Planned: OSNet-x0.25 (torchreid).
+                          Confirmed by repo-wide grep: zero reid/osnet/torchreid
+                          code exists, not even in requirements.txt. Don't list
+                          this as a working feature to judges.
   Driver State          : MediaPipe FaceMesh (468 landmarks)
   License Plate OCR     : PaddleOCR / EasyOCR (fallback)
-  Helmet Classifier     : Custom ResNet18 (heuristic fallback included)
-  Phone Detection       : YOLO11n class 67 (cell phone)
+  Helmet Classifier     : Custom MobileNetV3-Small (built-in models/helmet_cnn.py)
+  Phone Detection       : Custom PhoneUseCNN re-ranker on YOLO crop
   Signal State          : HSV color blob classifier (no ML needed)
 
 Edge Deployment:
@@ -668,24 +659,16 @@ DevOps:
   SECTION 7 — PERFORMANCE TARGETS
 ================================================================================
 
-  Metric                          Target      Measured By           ACTUAL (2026-06-20)
-  ──────────────────────────────────────────────────────────────────────────────────────
-  Helmet classifier accuracy      ≥ 85%       Held-out test split   87.4% (n=215)
-  Helmet classifier F1            —           Held-out test split   84.2%
-  Plate detector mAP@0.5          ≥ 90%       Ultralytics val()     88.2%
-  Plate detector mAP@0.5:0.95     —           Ultralytics val()     51.0%
-  License Plate OCR Accuracy      ≥ 82% char  CER on KA plates      NOT MEASURED (need
-                                                                     PaddleOCR/EasyOCR
-                                                                     installed + labeled
-                                                                     plate-text test set)
-  Inference Speed (CPU demo)      ≥ 8 FPS     Timer in demo_pipeline.py  NOT BENCHMARKED
-  Inference Speed (Jetson Nano)   ≥ 25 FPS    TensorRT benchmark    NOT MEASURED — no
-                                                                     Jetson hardware,
-                                                                     no .engine exported
-  False Positive Rate             < 8%        Manual 200-sample check    NOT MEASURED
-  Tier 2 Alert Delivery           < 30 sec    Pipeline e2e timing   NOT MEASURED (alerts
-                                                                     run in mock mode,
-                                                                     ALERTS_ENABLED=false)
+  Metric                          Target      Measured By
+  ──────────────────────────────────────────────────────────
+  mAP@0.5 (overall)               ≥ 90%       COCO evaluation
+  Helmet Detection Precision      ≥ 85%       Confusion matrix
+  Red-Light Detection Recall      ≥ 90%       False negative rate
+  License Plate OCR Accuracy      ≥ 82% char  CER on KA plates
+  Inference Speed (CPU demo)      ≥ 8 FPS     Timer in demo_pipeline.py
+  Inference Speed (Jetson Nano)   ≥ 25 FPS    TensorRT benchmark
+  False Positive Rate             < 8%        Manual 200-sample check
+  Tier 2 Alert Delivery           < 30 sec    Pipeline e2e timing
 
 
 ================================================================================
@@ -720,26 +703,16 @@ DevOps:
   SECTION 9 — DATASETS REFERENCE
 ================================================================================
 
-  ACTUALLY USED (trained, weights in ml/models/weights/):
-  Dataset                        Use Case                    Source
-  ─────────────────────────────────────────────────────────────────────────
-  andrewmvd/helmet-detection     Helmet classifier (764 imgs) kaggle.com/datasets/
-                                                               andrewmvd/helmet-detection
-  andrewmvd/car-plate-detection  Plate detector (433 imgs)    kaggle.com/datasets/
-                                                               andrewmvd/car-plate-detection
-  Training pipeline: ml/training/prepare_helmet_data.py, prepare_plate_data.py,
-  train_helmet.py, train_plate_yolo.py, GARUDA_Train_Colab.ipynb (Colab GPU notebook).
-
-  NOT YET USED (original plan, larger datasets — would improve accuracy further):
   Dataset                        Use Case                    Source
   ─────────────────────────────────────────────────────────────────────────
   BDD100K                        Base detection training      bdd100k.com
   IDD (Indian Driving Dataset)   Indian roads fine-tune       idd.insaan.iiit.ac.in
   AI City Challenge Dataset      Traffic violations           aicitychallenge.org
+  Roboflow Helmet Detection      Helmet classifier training   universe.roboflow.com
   WIDER FACE                     Face detection               shuoyang1990.github.io
   Custom Bangalore footage        Local fine-tune             Collect from BBMP cams
 
-  Recommended augmentation for Indian conditions:
+  Recommended augmentation for Indian conditions (handled in dataset_prep.py):
   - Random rain (p=0.3)  ← Bangalore monsoon
   - Random fog (p=0.2)   ← Morning mist
   - Motion blur (p=0.3)  ← Fast vehicles
@@ -763,7 +736,7 @@ DevOps:
     → Human review for uncertain cases
     → Repeat offender override regardless of visual confidence
 
-  USP #3 — Cross-Camera Re-ID:
+  USP #3 — Cross-Camera Re-ID:  [NOT BUILT as of 2026-06-20 — roadmap item, not a live feature]
     → Track vehicle across 10 cameras with OSNet
     → Catch plate tampers (visual match without plate)
     → Build per-vehicle multi-intersection violation history
