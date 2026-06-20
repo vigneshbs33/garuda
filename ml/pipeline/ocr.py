@@ -219,21 +219,28 @@ class PlateOCR:
         if plate_image is None or plate_image.size == 0:
             return PlateResult()
 
-        enhanced = self._enhance_for_ocr(plate_image)
+        # For EasyOCR: run on raw colour image — neural net works best without pre-binarisation
         raw_text = ""
         confidence = 0.0
 
         if self._ocr is not None:
-            raw_text, confidence = self._extract_text(enhanced)
-            if not raw_text:
-                # Try again on grayscale inverted (some plates: white-on-dark)
-                raw_text, confidence = self._extract_text(
-                    cv2.bitwise_not(enhanced)
-                )
+            if self._engine_name == "easyocr":
+                # EasyOCR: read raw colour, also try enhanced
+                raw_text, confidence = self._easyocr_ocr(plate_image)
+                if not raw_text or confidence < 0.25:
+                    enhanced = self._enhance_for_ocr(plate_image)
+                    raw_text2, confidence2 = self._easyocr_ocr(enhanced)
+                    if confidence2 > confidence:
+                        raw_text, confidence = raw_text2, confidence2
+            else:
+                enhanced = self._enhance_for_ocr(plate_image)
+                raw_text, confidence = self._extract_text(enhanced)
+                if not raw_text or confidence < 0.3:
+                    raw_text2, confidence2 = self._extract_text(cv2.bitwise_not(enhanced))
+                    if confidence2 > confidence:
+                        raw_text, confidence = raw_text2, confidence2
 
-        if not raw_text:
-            raw_text, confidence = self._generate_deterministic_plate(plate_image)
-
+        # No fake/mock plate generation — return real OCR result or empty
         formatted, is_valid = self._parse_plate(raw_text)
         state_code = formatted[:2] if len(formatted) >= 2 else ""
         state_name = STATE_CODES.get(state_code, "Unknown")
@@ -245,37 +252,77 @@ class PlateOCR:
             state_code=state_code,
             state_name=state_name,
             is_valid=is_valid,
-            ocr_engine=self._engine_name if self._ocr is not None else "mock_generator",
+            ocr_engine=self._engine_name if self._ocr is not None else "none",
         )
 
-    def _generate_deterministic_plate(self, plate_image: np.ndarray) -> Tuple[str, float]:
-        """Generate a realistic Indian license plate deterministically based on image crop pixel sum"""
-        try:
-            # Resize image to a small fixed size to make the hash robust but unique
-            small = cv2.resize(plate_image, (16, 16))
-            pixel_sum = int(np.sum(small))
-        except Exception:
-            pixel_sum = int(np.sum(plate_image)) if plate_image is not None else 12345
-        
-        # Deterministic pseudo-random number generator (LCG)
-        seed = pixel_sum
-        def next_rand(mod):
-            nonlocal seed
-            seed = (seed * 1103515245 + 12345) & 0x7fffffff
-            return seed % mod
-            
-        state_codes = ["KA", "MH", "DL", "HR", "UP", "TS", "AP", "KL", "GJ", "TN", "WB"]
-        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        
-        state = state_codes[next_rand(len(state_codes))]
-        dist = f"{next_rand(99) + 1:02d}"
-        alpha1 = letters[next_rand(26)]
-        alpha2 = letters[next_rand(26)]
-        num = f"{next_rand(9000) + 1000:04d}"
-        
-        plate_str = f"{state} {dist} {alpha1}{alpha2} {num}"
-        confidence = 0.90 + (next_rand(10) / 100.0) # 0.90 to 0.99
-        return plate_str, confidence
+    def read_plate_from_vehicle(
+        self,
+        vehicle_crop: np.ndarray,
+    ) -> "PlateResult":
+        """
+        Read license plate from a full vehicle crop.
+
+        For EasyOCR: scans the entire vehicle crop for ALL text regions,
+        then picks the one that best matches Indian plate patterns.
+        Falls back to read_plate(detect_plate_region(...)) otherwise.
+
+        Parameters
+        ----------
+        vehicle_crop : BGR numpy array of the entire vehicle bounding box crop
+        """
+        if vehicle_crop is None or vehicle_crop.size == 0:
+            return PlateResult()
+
+        if self._engine_name == "easyocr" and self._ocr is not None:
+            try:
+                results = self._ocr.readtext(vehicle_crop)
+                best_text = ""
+                best_conf = 0.0
+
+                for (bbox_pts, text, conf) in results:
+                    text_clean = re.sub(r"[^A-Z0-9\s\-]", "", text.upper().strip())
+                    if len(text_clean) < 4:
+                        continue
+                    # Try to match any plate pattern first
+                    matched = False
+                    for pattern in PLATE_PATTERNS:
+                        if pattern.search(text_clean):
+                            if conf > best_conf:
+                                best_conf = conf
+                                best_text = text_clean
+                            matched = True
+                            break
+                    if not matched:
+                        # Accept 6-12 char alphanumeric if better confidence
+                        no_sp = re.sub(r"[\s\-]", "", text_clean)
+                        if 6 <= len(no_sp) <= 12 and conf > best_conf:
+                            best_conf = conf
+                            best_text = text_clean
+
+                if best_text and best_conf > 0.2:
+                    formatted, is_valid = self._parse_plate(best_text)
+                    state_code = formatted[:2] if len(formatted) >= 2 else ""
+                    state_name = STATE_CODES.get(state_code, "Unknown")
+                    return PlateResult(
+                        raw_text=best_text,
+                        formatted_text=formatted,
+                        confidence=best_conf,
+                        state_code=state_code,
+                        state_name=state_name,
+                        is_valid=is_valid,
+                        ocr_engine="easyocr_vehicle",
+                    )
+            except Exception as e:
+                logger.warning("EasyOCR vehicle scan error: %s", e)
+
+        # Fallback: extract plate region and run standard read_plate
+        plate_region = self.detect_plate_region(
+            vehicle_crop,
+            [0, 0, vehicle_crop.shape[1], vehicle_crop.shape[0]],
+        )
+        if plate_region is not None and plate_region.size > 0:
+            return self.read_plate(plate_region)
+        return PlateResult()
 
     def detect_plate_region(
         self,
@@ -422,11 +469,13 @@ class PlateOCR:
         """Multi-stage plate enhancement pipeline"""
         h, w = image.shape[:2]
 
-        # 1. Upscale small plates to minimum 60px height
-        if h < 60:
-            scale = 60.0 / h
+        # 1. Upscale small plates to minimum 80px height for better OCR accuracy
+        if h < 80:
+            scale = 80.0 / h
+            new_h = 80
+            new_w = max(int(w * scale), 200)  # Also ensure minimum width
             image = cv2.resize(
-                image, (int(w * scale), 60), interpolation=cv2.INTER_CUBIC
+                image, (new_w, new_h), interpolation=cv2.INTER_CUBIC
             )
 
         # 2. Convert to LAB → CLAHE on L channel → back to BGR
