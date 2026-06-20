@@ -1,0 +1,29 @@
+
+  bro serch up wt they actuall use to to get licency plane     
+  
+  
+  
+  Industry standard = YOLOv8 for plate detection + EasyOCR for text reading
+
+  That's exactly the combo most used — GeeksforGeeks ANPR tutorial
+  (https://www.geeksforgeeks.org/computer-vision/automatic-license-number-plate
+  -recognition-system/), fastanpr on PyPI (https://pypi.org/project/fastanpr/),
+   keshavoct98's Indian LPR
+  (https://github.com/keshavoct98/Indian-Number-Plate-Recognition) all use this
+   stack. fast-plate-ocr is trained on Argentinian/European plates — it returns
+   empty strings for Indian plates because it was never trained on them.       
+
+  We already have EasyOCR installed. The fix is to switch primary OCR from     
+  fast-plate-ocr → EasyOCR and scan the full vehicle crop (not just the tiny   
+  plate sub-region). Want me to make that switch now?
+ 
+  Sources:
+  - Indian-Number-Plate-Recognition (YOLOv4 + keras-ocr)
+  (https://github.com/keshavoct98/Indian-Number-Plate-Recognition)
+  - ANPR System with EasyOCR — GeeksforGeeks (https://www.geeksforgeeks.org/com
+  puter-vision/automatic-license-number-plate-recognition-system/)
+  - fastanpr PyPI — YOLOv8 + PaddleOCR (https://pypi.org/project/fastanpr/)    
+  - PyImageSearch ALPR 2024 (https://pyimagesearch.com/2024/06/10/automatic-lic
+  ense-plate-reader-using-ocr-in-python/)
+  - PlateRecognizePy — Indian plates support
+  (https://pypi.org/project/PlateRecognizePy/)

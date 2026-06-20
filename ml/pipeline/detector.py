@@ -1,7 +1,7 @@
 """
 GARUDA ML Pipeline — Vehicle & Person Detector
 ================================================
-Model  : YOLO11n (Ultralytics) — auto-downloads on first run
+Model  : YOLOv8m (Ultralytics) — auto-downloads on first run
 Formats: PyTorch (.pt), TensorRT (.engine), TFLite (.tflite)
 Purpose: Detect and localize all traffic participants in a frame
 
@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 VEHICLE_CLASS_IDS = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck", 1: "bicycle"}
 PERSON_CLASS_ID = 0
-ALL_TRAFFIC_CLASS_IDS = {**VEHICLE_CLASS_IDS, PERSON_CLASS_ID: "person"}
+PHONE_CLASS_ID  = 67   # COCO "cell phone"
+ALL_TRAFFIC_CLASS_IDS = {**VEHICLE_CLASS_IDS, PERSON_CLASS_ID: "person", PHONE_CLASS_ID: "cell_phone"}
 
 TWO_WHEELER_IDS = {1, 3}   # bicycle + motorcycle
 FOUR_WHEELER_IDS = {2, 5, 7}  # car + bus + truck
@@ -153,7 +154,7 @@ class VehicleDetector:
         self,
         model_path: Optional[str] = None,
         device: str = "cpu",
-        conf: float = 0.35,
+        conf: float = 0.25,
         iou: float = 0.45,
     ) -> None:
         self.device = device
@@ -174,8 +175,8 @@ class VehicleDetector:
                 self._model = YOLO(model_path)
                 logger.info("Loaded model: %s", model_path)
             else:
-                self._model = YOLO("yolo11n.pt")   # downloads ~6 MB on first run
-                logger.info("Loaded pretrained yolo11n.pt (auto-downloaded)")
+                self._model = YOLO("yolov8m.pt")   # downloads ~52 MB on first run
+                logger.info("Loaded pretrained yolov8m.pt (auto-downloaded)")
 
         except ImportError as exc:
             raise ImportError(
@@ -312,6 +313,9 @@ class VehicleDetector:
 
     def get_persons(self, detections: List[Detection]) -> List[Detection]:
         return [d for d in detections if d.is_person]
+
+    def get_phones(self, detections: List[Detection]) -> List[Detection]:
+        return [d for d in detections if d.class_id == PHONE_CLASS_ID]
 
     def get_two_wheelers(self, detections: List[Detection]) -> List[Detection]:
         return [d for d in detections if d.is_two_wheeler]
