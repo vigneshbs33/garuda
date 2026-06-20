@@ -21,6 +21,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import cv2
@@ -134,15 +135,31 @@ class HelmetClassifier:
 
     def __init__(self, weights_path: Optional[str] = None) -> None:
         self._model = None
+        self._class_to_idx = {"no_helmet": 0, "helmet": 1}
         if weights_path:
             self._load_weights(weights_path)
 
     def _load_weights(self, path: str) -> None:
         try:
+            import json
             import torch
-            self._model = torch.load(path, map_location="cpu")
-            self._model.eval()
-            logger.info("Helmet classifier loaded: %s", path)
+            from ml.models.helmet_cnn import HelmetCNN
+
+            model = HelmetCNN(pretrained_mobilenet=True)
+            state_dict = torch.load(path, map_location="cpu")
+            model.load_state_dict(state_dict)
+            model.eval()
+            self._model = model
+
+            # Trained class_to_idx may not be alphabetical (helmet=1 by convention,
+            # but train_helmet.py records the real mapping in helmet_metrics.json)
+            metrics_path = Path(path).with_name("helmet_metrics.json")
+            if metrics_path.exists():
+                mapping = json.loads(metrics_path.read_text()).get("class_to_idx")
+                if mapping:
+                    self._class_to_idx = mapping
+
+            logger.info("Helmet classifier loaded (trained weights): %s", path)
         except Exception as e:
             logger.warning("Could not load helmet weights (%s). Using heuristic.", e)
 
@@ -172,10 +189,11 @@ class HelmetClassifier:
             T.ToTensor(),
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
-        tensor = tf(image).unsqueeze(0)
+        helmet_idx = self._class_to_idx.get("helmet", 1)
+        tensor = tf(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)).unsqueeze(0)
         with torch.no_grad():
             logits = self._model(tensor)
-            prob = float(torch.softmax(logits, dim=1)[0][1])
+            prob = float(torch.softmax(logits, dim=1)[0][helmet_idx])
         return prob > 0.50, prob
 
     def _heuristic_classify(self, image: np.ndarray) -> Tuple[bool, float]:

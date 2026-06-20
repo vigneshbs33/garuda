@@ -120,11 +120,23 @@ class PlateOCR:
     use_gpu : Enable GPU acceleration (auto-disabled if CUDA unavailable)
     """
 
-    def __init__(self, use_gpu: bool = False) -> None:
+    def __init__(self, use_gpu: bool = False, plate_detector_weights: Optional[str] = None) -> None:
         self.use_gpu = use_gpu
         self._engine_name: str = "none"
         self._ocr = None
+        self._plate_detector = None
         self._init_engine()
+        if plate_detector_weights:
+            self._load_plate_detector(plate_detector_weights)
+
+    def _load_plate_detector(self, weights_path: str) -> None:
+        """Load a fine-tuned YOLO11n plate-bbox detector (see ml/training/train_plate_yolo.py)."""
+        try:
+            from ultralytics import YOLO  # type: ignore
+            self._plate_detector = YOLO(weights_path)
+            logger.info("Plate detector loaded (trained YOLO): %s", weights_path)
+        except Exception as e:
+            logger.warning("Could not load plate detector weights (%s). Using contour heuristic.", e)
 
     # ------------------------------------------------------------------
     # Engine initialisation
@@ -233,11 +245,20 @@ class PlateOCR:
     ) -> Optional[np.ndarray]:
         """
         Locate license plate within vehicle bounding box.
-        Uses contour detection + aspect-ratio filtering.
+
+        Uses the trained YOLO plate detector when available (much more
+        reliable than contours), falling back to contour detection +
+        aspect-ratio filtering otherwise.
 
         Plate typical aspect ratio: 4:1 to 7:1 (width:height)
         Plate location: lower 35% of vehicle bbox
         """
+        if self._plate_detector is not None:
+            crop = self._detect_plate_region_yolo(image, vehicle_bbox)
+            if crop is not None:
+                return crop
+            # fall through to heuristic if YOLO found nothing in this crop
+
         x1, y1, x2, y2 = map(int, vehicle_bbox)
         vh = y2 - y1
 
@@ -279,6 +300,33 @@ class PlateOCR:
 
         # Fallback: return bottom strip of vehicle (simple heuristic)
         return roi[int(roi.shape[0] * 0.3) :, :]
+
+    def _detect_plate_region_yolo(
+        self,
+        image: np.ndarray,
+        vehicle_bbox: List[float],
+    ) -> Optional[np.ndarray]:
+        """Run the fine-tuned plate detector on the vehicle crop, return the highest-confidence plate crop."""
+        x1, y1, x2, y2 = map(int, vehicle_bbox)
+        vehicle_crop = image[max(0, y1):y2, max(0, x1):x2]
+        if vehicle_crop.size == 0:
+            return None
+
+        results = self._plate_detector.predict(source=vehicle_crop, conf=0.35, verbose=False)
+        best_box, best_conf = None, 0.0
+        for result in results:
+            for box in result.boxes:
+                conf = float(box.conf[0])
+                if conf > best_conf:
+                    best_conf = conf
+                    best_box = box.xyxy[0].tolist()
+
+        if best_box is None:
+            return None
+
+        px1, py1, px2, py2 = map(int, best_box)
+        crop = vehicle_crop[py1:py2, px1:px2]
+        return crop if crop.size > 0 else None
 
     # ------------------------------------------------------------------
     # Internal: text extraction per engine

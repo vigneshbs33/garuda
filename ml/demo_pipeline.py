@@ -51,6 +51,20 @@ logging.basicConfig(
 logger = logging.getLogger("garuda.demo")
 
 # ---------------------------------------------------------------------------
+# Trained weight auto-discovery (see ml/training/ + GARUDA_Train_Colab.ipynb)
+# ---------------------------------------------------------------------------
+
+WEIGHTS_DIR = Path(__file__).parent / "models" / "weights"
+HELMET_WEIGHTS = WEIGHTS_DIR / "helmet_cnn.pt"
+PLATE_WEIGHTS = WEIGHTS_DIR / "plate_yolo.pt"
+
+
+def _resolve_weight(path: Path, cli_override: str | None) -> str | None:
+    if cli_override:
+        return cli_override
+    return str(path) if path.exists() else None
+
+# ---------------------------------------------------------------------------
 # Camera metadata for demo
 # ---------------------------------------------------------------------------
 
@@ -71,10 +85,17 @@ def run_image(args) -> None:
     logger.info("=" * 64)
 
     # --- Init modules ---
+    helmet_weights = _resolve_weight(HELMET_WEIGHTS, args.helmet_weights)
+    plate_weights  = _resolve_weight(PLATE_WEIGHTS, args.plate_weights)
+    if helmet_weights:
+        logger.info("Using trained helmet classifier: %s", helmet_weights)
+    if plate_weights:
+        logger.info("Using trained plate detector: %s", plate_weights)
+
     preprocessor = ImagePreprocessor()
     detector     = VehicleDetector(device="cpu")
-    ocr          = PlateOCR()
-    classifier   = ViolationClassifier(stop_line_y=args.stop_line_y)
+    ocr          = PlateOCR(plate_detector_weights=plate_weights)
+    classifier   = ViolationClassifier(stop_line_y=args.stop_line_y, helmet_weights_path=helmet_weights)
     repeat_db    = RepeatOffenderDB()
     router       = ConfidenceRouter(repeat_db)
     packager     = EvidencePackager(output_dir=args.output)
@@ -208,11 +229,14 @@ def run_video(args) -> None:
     source = 0 if args.webcam else args.input
     logger.info("GARUDA — Video Pipeline | source=%s", "webcam" if args.webcam else args.input)
 
+    helmet_weights = _resolve_weight(HELMET_WEIGHTS, args.helmet_weights)
+    plate_weights  = _resolve_weight(PLATE_WEIGHTS, args.plate_weights)
+
     preprocessor  = ImagePreprocessor()
     detector      = VehicleDetector(device="cpu")
     tracker       = VehicleTracker(stop_line_y=args.stop_line_y)
-    ocr           = PlateOCR()
-    classifier    = ViolationClassifier(stop_line_y=args.stop_line_y)
+    ocr           = PlateOCR(plate_detector_weights=plate_weights)
+    classifier    = ViolationClassifier(stop_line_y=args.stop_line_y, helmet_weights_path=helmet_weights)
     repeat_db     = RepeatOffenderDB()
     router        = ConfidenceRouter(repeat_db)
     packager      = EvidencePackager(output_dir=args.output)
@@ -324,7 +348,7 @@ def main() -> None:
 
     parser.add_argument("--video",        "-v", action="store_true", help="Treat --input as video")
     parser.add_argument("--output",       "-o", default="evidence",  help="Output directory")
-    parser.add_argument("--show",         "-s", action="store_true", default=True,
+    parser.add_argument("--show",         "-s", action="store_true", default=False,
                         help="Show result in OpenCV window")
     parser.add_argument("--stop-line-y",        type=int, default=380,
                         help="Y-coordinate of stop line in pixels (default: 380)")
@@ -332,6 +356,10 @@ def main() -> None:
                         help="Enable driver drowsiness + phone detection")
     parser.add_argument("--verbose",             action="store_true",
                         help="Print WhatsApp alert previews to console")
+    parser.add_argument("--helmet-weights",      default=None,
+                        help=f"Path to trained helmet_cnn.pt (default: auto-detect {HELMET_WEIGHTS})")
+    parser.add_argument("--plate-weights",       default=None,
+                        help=f"Path to trained plate_yolo.pt (default: auto-detect {PLATE_WEIGHTS})")
 
     args = parser.parse_args()
 
