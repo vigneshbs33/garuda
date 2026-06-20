@@ -143,6 +143,8 @@ class PlateOCR:
     # ------------------------------------------------------------------
 
     def _init_engine(self) -> None:
+        if self._try_fast_plate_ocr():
+            return
         if self._try_paddle():
             return
         if self._try_easyocr():
@@ -150,8 +152,19 @@ class PlateOCR:
         if self._try_tesseract():
             return
         logger.error(
-            "No OCR engine found. Install: pip install paddleocr  OR  pip install easyocr"
+            "No OCR engine found. Install: pip install 'fast-plate-ocr[onnx]'"
         )
+
+    def _try_fast_plate_ocr(self) -> bool:
+        try:
+            from fast_plate_ocr import LicensePlateRecognizer  # type: ignore
+            self._ocr = LicensePlateRecognizer("cct-s-v2-global-model")
+            self._engine_name = "fast_plate_ocr"
+            logger.info("OCR engine: fast-plate-ocr (cct-s-v2-global-model)")
+            return True
+        except (ImportError, Exception) as e:
+            logger.debug("fast-plate-ocr unavailable: %s", e)
+            return False
 
     def _try_paddle(self) -> bool:
         try:
@@ -224,8 +237,16 @@ class PlateOCR:
         confidence = 0.0
 
         if self._ocr is not None:
-            if self._engine_name == "easyocr":
-                # EasyOCR: read raw colour, also try enhanced
+            if self._engine_name == "fast_plate_ocr":
+                # fast-plate-ocr works best on raw colour crop; try enhanced as fallback
+                raw_text, confidence = self._fast_plate_ocr_read(plate_image)
+                if not raw_text or confidence < 0.25:
+                    enhanced = self._enhance_for_ocr(plate_image)
+                    raw_text2, confidence2 = self._fast_plate_ocr_read(enhanced)
+                    if confidence2 > confidence:
+                        raw_text, confidence = raw_text2, confidence2
+            elif self._engine_name == "easyocr":
+                # EasyOCR: read raw colour image
                 raw_text, confidence = self._easyocr_ocr(plate_image)
                 if not raw_text or confidence < 0.25:
                     enhanced = self._enhance_for_ocr(plate_image)
@@ -424,7 +445,9 @@ class PlateOCR:
             return "", 0.0
 
         try:
-            if self._engine_name == "paddle":
+            if self._engine_name == "fast_plate_ocr":
+                return self._fast_plate_ocr_read(image)
+            elif self._engine_name == "paddle":
                 return self._paddle_ocr(image)
             elif self._engine_name == "easyocr":
                 return self._easyocr_ocr(image)
@@ -434,6 +457,24 @@ class PlateOCR:
             logger.warning("OCR extraction error: %s", e)
 
         return "", 0.0
+
+    def _fast_plate_ocr_read(self, image: np.ndarray) -> Tuple[str, float]:
+        """fast-plate-ocr: specialized plate recognition, no general OCR overhead."""
+        try:
+            import numpy as _np
+            results = self._ocr.run(image, return_confidence=True)
+            if not results:
+                return "", 0.0
+            pred = results[0]
+            text = pred.plate.upper().strip()
+            if not text or len(text) < 3:
+                return "", 0.0
+            # Use mean char confidence as overall score
+            conf = float(_np.mean(pred.char_probs)) if hasattr(pred, "char_probs") and len(pred.char_probs) else 0.5
+            return text, conf
+        except Exception as e:
+            logger.debug("fast-plate-ocr read failed: %s", e)
+            return "", 0.0
 
     def _paddle_ocr(self, image: np.ndarray) -> Tuple[str, float]:
         result = self._ocr.ocr(image, cls=True)
