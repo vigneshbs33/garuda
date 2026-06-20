@@ -78,9 +78,16 @@ class EvidencePackager:
         driver_alerts: Optional[List[Dict]] = None,
         track_info: Optional[Dict] = None,
         processing_info: Optional[Dict] = None,
+        violation_id: Optional[str] = None,
     ) -> Dict:
         """
         Generate full evidence package for one or more violations in a frame.
+
+        Parameters
+        ----------
+        violation_id : Reuse an ID already assigned upstream (e.g. by
+                       ConfidenceRouter), so evidence files and DB records
+                       share the same ID. Generates a fresh one if omitted.
 
         Returns
         -------
@@ -93,7 +100,7 @@ class EvidencePackager:
         }
         """
         ts = datetime.utcnow()
-        vid = self._gen_id(ts)
+        vid = violation_id or self._gen_id(ts)
 
         # --- Save raw frame ---
         raw_path = self.root / "raw" / f"{vid}_raw.jpg"

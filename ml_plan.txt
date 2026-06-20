@@ -7,8 +7,53 @@
 Last Updated : 2026-06-20
 Team         : CodeKrafters
 Hackathon    : Flipkart Gridlock 3.0
+Pitch name   : "Gridlock Guardian" (codebase/internal name remains GARUDA)
 ML Engineer  : [You] — ML Pipeline + Backend
 Frontend Dev : [Friend] — UI/UX + Dashboard
+
+
+================================================================================
+  CURRENT STATUS SUMMARY (read this first — replaces stale [TODO] tags below)
+================================================================================
+
+DONE AND VERIFIED (real code, ran end-to-end, no crashes):
+  - All 9 violation checks (helmet, seatbelt, triple riding, wrong-side,
+    stop-line, red-light, illegal parking, phone use, drowsy driving)
+  - Confidence router: Tier 1/2/3 thresholds (0.90/0.60/0.40) + repeat-
+    offender override + WhatsApp/SMS alert text generation
+  - Driver state: real MediaPipe EAR/MAR math + YOLO phone detection (class 67)
+  - License plate OCR fallback chain (PaddleOCR -> EasyOCR -> Tesseract)
+  - Evidence packager: annotated JPEG + JSON record, ID now consistent
+    between router decision and saved files (was a bug, fixed)
+  - FastAPI backend: all REST + WebSocket routes implemented against a
+    real async SQLAlchemy DB (not mocked)
+  - ML pipeline -> backend wiring: demo_pipeline.py --backend-url posts
+    real detections to /api/v1/violations/ingest so the dashboard reflects
+    actual ML output instead of only /debug/inject-violation fakes
+  - TRAINED MODELS (real weights, real metrics, in ml/models/weights/):
+      helmet_cnn.pt   — 87.4% test accuracy, 84.2% F1 (MobileNetV3-Small)
+      plate_yolo.pt   — 88.2% mAP50, 51.0% mAP50-95 (YOLO11n fine-tune)
+    Both auto-load in demo_pipeline.py with graceful heuristic fallback.
+
+PARTIAL / SIMPLIFIED vs. the original ambition:
+  - Wrong-side driving uses a velocity-vector heuristic, NOT a trained
+    UFLD lane-detection model (no lane dataset/model exists in this repo)
+  - Seatbelt detection uses Hough-line heuristic capped at conf 0.62,
+    always routed to Tier 2 — no trained seatbelt classifier
+  - Edge export: export_tensorrt()/export_tflite() in detector.py are
+    real Ultralytics calls but UNTESTED — no Jetson/Pi hardware available,
+    no .engine/.tflite artifact has ever been produced. FPS targets below
+    are aspirational, not measured.
+  - Federated learning (ml/federated/): Flower client/server wiring is
+    real (FedAvg, weekly correction filtering from SQLite), but
+    `_local_train()` is a no-op stub and `_local_evaluate()` returns
+    `0.0, 0.0  # Stub` — no actual training happens yet.
+
+NOT IMPLEMENTED (zero code, despite being in early planning docs):
+  - Cross-camera vehicle Re-ID (OSNet/torchreid + Redis "Global Vehicle
+    Registry"). Confirmed by full-repo grep: no reid/osnet/torchreid code,
+    not even in requirements.txt. ByteTrack tracking IS real, but only
+    within a single camera's frames — there is no cross-camera matching.
 
 
 ================================================================================
@@ -40,57 +85,64 @@ garuda/
 │   ├── pipeline/
 │   │   ├── __init__.py
 │   │   ├── preprocessor.py          [DONE] Image enhancement pipeline
-│   │   ├── detector.py              [TODO] YOLO11n vehicle+person detector
-│   │   ├── tracker.py               [TODO] ByteTrack multi-object tracking
-│   │   ├── ocr.py                   [TODO] PaddleOCR license plate reader
-│   │   ├── violation_classifier.py  [TODO] All 7 violation detectors
-│   │   ├── confidence_router.py     [TODO] Tier 1/2/3 routing engine
-│   │   └── driver_state.py          [TODO] Drowsiness + phone detection
+│   │   ├── detector.py              [DONE] YOLO11n vehicle+person detector
+│   │   ├── tracker.py               [DONE] ByteTrack multi-object tracking
+│   │   ├── ocr.py                   [DONE] PaddleOCR license plate reader
+│   │   ├── violation_classifier.py  [DONE] All 9 violation detectors
+│   │   ├── confidence_router.py     [DONE] Tier 1/2/3 routing engine
+│   │   └── driver_state.py          [DONE] Drowsiness + phone detection
 │   │
 │   ├── federated/
-│   │   ├── client.py                [TODO] Flower FL edge node client
-│   │   └── server.py                [TODO] Flower FL aggregation server
+│   │   ├── client.py                [PARTIAL] Flower FL edge node client
+│   │   └── server.py                [PARTIAL] Flower FL aggregation server
 │   │
 │   ├── utils/
-│   │   ├── evidence.py              [TODO] Annotated image + JSON packager
-│   │   └── visualizer.py            [TODO] Real-time frame drawing utilities
+│   │   ├── evidence.py              [DONE] Annotated image + JSON packager
+│   │   └── visualizer.py            [DONE] Real-time frame drawing utilities
 │   │
-│   └── demo_pipeline.py             [TODO] End-to-end demo script (run this!)
+│   ├── models/
+│   │   ├── helmet_cnn.py            [DONE] MobileNetV3-Small architecture
+│   │   └── weights/                 [DONE] Trained: helmet_cnn.pt (87.4% acc), plate_yolo.pt (88.2% mAP50)
+│   │
+│   ├── training/                    [DONE] voc_utils, prepare_helmet_data, prepare_plate_data,
+│   │                                       train_helmet, train_plate_yolo, GARUDA_Train_Colab.ipynb
+│   │
+│   └── demo_pipeline.py             [DONE] End-to-end demo script — supports --backend-url to push live
 │
 ├── backend/                         ← FastAPI REST + WebSocket server
-│   ├── main.py                      [TODO] App entry point
+│   ├── main.py                      [DONE] App entry point
 │   ├── core/
-│   │   ├── config.py                [TODO] Settings from .env
-│   │   ├── database.py              [TODO] SQLite (dev) / PostgreSQL (prod)
-│   │   └── alert_service.py         [TODO] Twilio WhatsApp + SMS (mock mode)
+│   │   ├── config.py                [DONE] Settings from .env
+│   │   ├── database.py              [DONE] SQLite (dev) / PostgreSQL (prod)
+│   │   └── alert_service.py         [DONE] Twilio WhatsApp + SMS (mock mode)
 │   ├── models/
-│   │   └── schemas.py               [TODO] All Pydantic v2 data models
+│   │   └── schemas.py               [DONE] All Pydantic v2 data models
 │   ├── api/
-│   │   ├── violations.py            [TODO] Violation CRUD endpoints
-│   │   ├── cameras.py               [TODO] Camera management endpoints
-│   │   ├── vehicles.py              [TODO] Vehicle + repeat offender registry
-│   │   ├── analytics.py             [TODO] Stats, trends, reports
-│   │   └── stream.py                [TODO] WebSocket live detection feed
+│   │   ├── violations.py            [DONE] Violation CRUD endpoints
+│   │   ├── cameras.py               [DONE] Camera management endpoints
+│   │   ├── vehicles.py              [DONE] Vehicle + repeat offender registry
+│   │   ├── analytics.py             [DONE] Stats, trends, reports
+│   │   └── stream.py                [DONE] WebSocket live detection feed
 │   └── workers/
-│       └── violation_worker.py      [TODO] Async background violation processor
+│       └── violation_worker.py      [NOT BUILT] Async background violation processor
 │
 ├── frontend/                        ← Light dashboard (easy to swap framework)
-│   ├── index.html                   [TODO] Single-page dashboard
+│   ├── index.html                   [DONE] Single-page dashboard
 │   ├── css/
-│   │   └── style.css                [TODO] Dark mode design system (CSS vars)
+│   │   └── style.css                [DONE] Dark mode design system (CSS vars)
 │   └── js/
-│       ├── api.js                   [TODO] ALL API calls in one file (swap-easy)
-│       ├── app.js                   [TODO] Main dashboard logic
-│       ├── map.js                   [TODO] Leaflet violation heatmap
-│       ├── charts.js                [TODO] Chart.js violation statistics
-│       └── websocket.js             [TODO] Live feed WebSocket handler
+│       ├── api.js                   [DONE] ALL API calls in one file (swap-easy)
+│       ├── app.js                   [DONE] Main dashboard logic
+│       ├── map.js                   [DONE] Leaflet violation heatmap
+│       ├── charts.js                [DONE] Chart.js violation statistics
+│       └── websocket.js             [DONE] Live feed WebSocket handler
 │
-├── docker-compose.yml               [TODO] One-command full stack startup
-├── requirements.txt                 [TODO] All Python dependencies
-├── .env.example                     [TODO] Environment variable template
-├── BACKEND_REFERENCE.md             [TODO] Frontend dev's complete API guide
+├── docker-compose.yml               [NOT BUILT] One-command full stack startup
+├── requirements.txt                 [DONE] All Python dependencies
+├── .env.example                     [DONE] Environment variable template
+├── BACKEND_REFERENCE.md             [DONE] Frontend dev's complete API guide
 ├── ml_plan.txt                      [THIS FILE] ML architecture reference
-└── README.md                        [TODO] Setup and run instructions
+└── README.md                        [NOT BUILT] Setup and run instructions
 
 
 ================================================================================
@@ -129,7 +181,7 @@ Dependencies: opencv-python, albumentations
 
 
 ------------------------------------------------------------
-  MODULE 2: detector.py  [STATUS: TODO]
+  MODULE 2: detector.py  [STATUS: DONE — TensorRT/TFLite export untested]
 ------------------------------------------------------------
 Class    : VehicleDetector
 Model    : YOLO11n (ultralytics) — auto-downloads pretrained weights
@@ -167,7 +219,7 @@ Dependencies: ultralytics
 
 
 ------------------------------------------------------------
-  MODULE 3: tracker.py  [STATUS: TODO]
+  MODULE 3: tracker.py  [STATUS: DONE — within-camera ByteTrack only, no cross-camera Re-ID]
 ------------------------------------------------------------
 Class    : VehicleTracker
 Model    : ByteTrack (built into Ultralytics)
@@ -195,7 +247,7 @@ Dependencies: ultralytics (ByteTrack included)
 
 
 ------------------------------------------------------------
-  MODULE 4: ocr.py  [STATUS: TODO]
+  MODULE 4: ocr.py  [STATUS: DONE — trained YOLO plate detector wired in, mAP50=0.882]
 ------------------------------------------------------------
 Class    : PlateOCR
 Model    : PaddleOCR (primary) / EasyOCR (fallback)
@@ -229,7 +281,7 @@ Dependencies: paddleocr OR easyocr (fallback)
 
 
 ------------------------------------------------------------
-  MODULE 5: violation_classifier.py  [STATUS: TODO]
+  MODULE 5: violation_classifier.py  [STATUS: DONE — helmet uses trained CNN (87.4% acc), seatbelt/wrong-side remain heuristic]
 ------------------------------------------------------------
 Class    : ViolationClassifier
 Purpose  : Detect all 7 violation types from PS + driver state
@@ -288,7 +340,7 @@ Dependencies: opencv-python, torch (for HelmetClassifier CNN)
 
 
 ------------------------------------------------------------
-  MODULE 6: confidence_router.py  [STATUS: TODO]
+  MODULE 6: confidence_router.py  [STATUS: DONE]
 ------------------------------------------------------------
 Class    : ConfidenceRouter
 Purpose  : Route detections to correct action based on confidence
@@ -328,7 +380,7 @@ Dependencies: none (pure Python)
 
 
 ------------------------------------------------------------
-  MODULE 7: driver_state.py  [STATUS: TODO]
+  MODULE 7: driver_state.py  [STATUS: DONE]
 ------------------------------------------------------------
 Class    : DriverStateDetector
 Purpose  : Pre-violation predictive alerts (USP #5)
@@ -361,7 +413,7 @@ Dependencies: mediapipe, ultralytics
 
 
 ------------------------------------------------------------
-  MODULE 8: evidence.py  [STATUS: TODO]
+  MODULE 8: evidence.py  [STATUS: DONE]
 ------------------------------------------------------------
 Class    : EvidencePackager
 Purpose  : Generate complete evidence package per violation
@@ -395,7 +447,7 @@ Dependencies: opencv-python, json, pathlib
 
 
 ------------------------------------------------------------
-  MODULE 9: federated/client.py + server.py  [STATUS: TODO]
+  MODULE 9: federated/client.py + server.py  [STATUS: PARTIAL — real Flower/FedAvg wiring, local training is a stub]
 ------------------------------------------------------------
 Framework : Flower (flwr)
 Purpose   : Privacy-safe weekly model improvement
@@ -616,16 +668,24 @@ DevOps:
   SECTION 7 — PERFORMANCE TARGETS
 ================================================================================
 
-  Metric                          Target      Measured By
-  ──────────────────────────────────────────────────────────
-  mAP@0.5 (overall)               ≥ 90%       COCO evaluation
-  Helmet Detection Precision      ≥ 85%       Confusion matrix
-  Red-Light Detection Recall      ≥ 90%       False negative rate
-  License Plate OCR Accuracy      ≥ 82% char  CER on KA plates
-  Inference Speed (CPU demo)      ≥ 8 FPS     Timer in demo_pipeline.py
-  Inference Speed (Jetson Nano)   ≥ 25 FPS    TensorRT benchmark
-  False Positive Rate             < 8%        Manual 200-sample check
-  Tier 2 Alert Delivery           < 30 sec    Pipeline e2e timing
+  Metric                          Target      Measured By           ACTUAL (2026-06-20)
+  ──────────────────────────────────────────────────────────────────────────────────────
+  Helmet classifier accuracy      ≥ 85%       Held-out test split   87.4% (n=215)
+  Helmet classifier F1            —           Held-out test split   84.2%
+  Plate detector mAP@0.5          ≥ 90%       Ultralytics val()     88.2%
+  Plate detector mAP@0.5:0.95     —           Ultralytics val()     51.0%
+  License Plate OCR Accuracy      ≥ 82% char  CER on KA plates      NOT MEASURED (need
+                                                                     PaddleOCR/EasyOCR
+                                                                     installed + labeled
+                                                                     plate-text test set)
+  Inference Speed (CPU demo)      ≥ 8 FPS     Timer in demo_pipeline.py  NOT BENCHMARKED
+  Inference Speed (Jetson Nano)   ≥ 25 FPS    TensorRT benchmark    NOT MEASURED — no
+                                                                     Jetson hardware,
+                                                                     no .engine exported
+  False Positive Rate             < 8%        Manual 200-sample check    NOT MEASURED
+  Tier 2 Alert Delivery           < 30 sec    Pipeline e2e timing   NOT MEASURED (alerts
+                                                                     run in mock mode,
+                                                                     ALERTS_ENABLED=false)
 
 
 ================================================================================
@@ -660,12 +720,22 @@ DevOps:
   SECTION 9 — DATASETS REFERENCE
 ================================================================================
 
+  ACTUALLY USED (trained, weights in ml/models/weights/):
+  Dataset                        Use Case                    Source
+  ─────────────────────────────────────────────────────────────────────────
+  andrewmvd/helmet-detection     Helmet classifier (764 imgs) kaggle.com/datasets/
+                                                               andrewmvd/helmet-detection
+  andrewmvd/car-plate-detection  Plate detector (433 imgs)    kaggle.com/datasets/
+                                                               andrewmvd/car-plate-detection
+  Training pipeline: ml/training/prepare_helmet_data.py, prepare_plate_data.py,
+  train_helmet.py, train_plate_yolo.py, GARUDA_Train_Colab.ipynb (Colab GPU notebook).
+
+  NOT YET USED (original plan, larger datasets — would improve accuracy further):
   Dataset                        Use Case                    Source
   ─────────────────────────────────────────────────────────────────────────
   BDD100K                        Base detection training      bdd100k.com
   IDD (Indian Driving Dataset)   Indian roads fine-tune       idd.insaan.iiit.ac.in
   AI City Challenge Dataset      Traffic violations           aicitychallenge.org
-  Roboflow Helmet Detection      Helmet classifier training   universe.roboflow.com
   WIDER FACE                     Face detection               shuoyang1990.github.io
   Custom Bangalore footage        Local fine-tune             Collect from BBMP cams
 

@@ -150,7 +150,7 @@ async def save_violation(session: AsyncSession, record: Dict) -> ViolationModel:
         fine_amount    = record.get("violations", [{}])[0].get("fine_amount_inr", 0) if record.get("violations") else 0,
         plate_text     = record.get("vehicle", {}).get("license_plate", ""),
         plate_conf     = record.get("vehicle", {}).get("plate_confidence", 0.0),
-        vehicle_class  = record.get("vehicle", {}).get("class", ""),
+        vehicle_class  = record.get("vehicle", {}).get("vehicle_class", ""),
         annotated_img  = record.get("evidence", {}).get("annotated_image", ""),
         raw_img        = record.get("evidence", {}).get("raw_frame", ""),
         json_record    = json.dumps(record, default=str),

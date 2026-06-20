@@ -64,6 +64,45 @@ def _resolve_weight(path: Path, cli_override: str | None) -> str | None:
         return cli_override
     return str(path) if path.exists() else None
 
+
+# ---------------------------------------------------------------------------
+# Backend push (ML pipeline -> FastAPI -> dashboard)
+# ---------------------------------------------------------------------------
+
+def _build_ingest_payload(decision, package: dict, plate_info: dict) -> dict:
+    """Map a routed decision + evidence package onto backend's ViolationIngestRequest schema."""
+    record = package["record"]
+    vehicle = dict(record["vehicle"])
+    vehicle["vehicle_class"] = vehicle.pop("class", "unknown")
+    vehicle.pop("plate_raw", None)
+
+    return {
+        "violation_id": decision.violation_id,
+        "tier": decision.tier,
+        "action": decision.action,
+        "timestamp": decision.timestamp,
+        "camera": record["camera"],
+        "vehicle": vehicle,
+        "violations": record["violations"],
+        "driver_state": record["driver_state"],
+        "evidence": record["evidence"],
+        "processing": record["processing"],
+        "plate": plate_info or None,
+        "escalation_reason": decision.escalation_reason,
+    }
+
+
+def _push_to_backend(decision, package: dict, plate_info: dict, backend_url: str) -> None:
+    """POST a violation to the live backend so the dashboard reflects real ML output."""
+    try:
+        import httpx
+        payload = _build_ingest_payload(decision, package, plate_info)
+        resp = httpx.post(f"{backend_url}/api/v1/violations/ingest", json=payload, timeout=3.0)
+        resp.raise_for_status()
+        logger.info("      Pushed to backend: %s", decision.violation_id)
+    except Exception as e:
+        logger.warning("      Could not push to backend (%s): %s", backend_url, e)
+
 # ---------------------------------------------------------------------------
 # Camera metadata for demo
 # ---------------------------------------------------------------------------
@@ -171,7 +210,7 @@ def run_image(args) -> None:
         if decision.tier == 2 and args.verbose:
             print("\n" + router.build_whatsapp_alert(decision) + "\n")
 
-        # Generate evidence
+        # Generate evidence (reuse the router's violation_id so DB + files agree)
         package = packager.create_package(
             frame=frame,
             violations=[decision.violation.to_dict()],
@@ -179,9 +218,13 @@ def run_image(args) -> None:
             camera_info=DEMO_CAMERA,
             driver_alerts=[a.to_dict() for a in driver_alerts],
             processing_info={"time_ms": round(elapsed_ms, 1), "model": "yolo11n"},
+            violation_id=decision.violation_id,
         )
         logger.info("      Evidence: %s", package["annotated_image_path"])
         results_summary.append(package)
+
+        if args.backend_url:
+            _push_to_backend(decision, package, plate_info, args.backend_url)
 
     # --- Display ---
     display = frame.copy()
@@ -360,6 +403,9 @@ def main() -> None:
                         help=f"Path to trained helmet_cnn.pt (default: auto-detect {HELMET_WEIGHTS})")
     parser.add_argument("--plate-weights",       default=None,
                         help=f"Path to trained plate_yolo.pt (default: auto-detect {PLATE_WEIGHTS})")
+    parser.add_argument("--backend-url",         default=None,
+                        help="If set (e.g. http://localhost:8000), POST violations to the live backend "
+                             "so the dashboard reflects real detections instead of /debug/inject-violation fakes")
 
     args = parser.parse_args()
 

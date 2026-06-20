@@ -1,11 +1,21 @@
 # GARUDA — Backend Reference Guide
 **For frontend developers and integration partners**
+*(Pitch name: "Gridlock Guardian" — Flipkart Gridlock 3.0. Code/API/DB still use "GARUDA" internally.)*
 
 ---
 
 ## What is GARUDA?
 
 GARUDA is an **edge-native, automated traffic violation detection system**. A camera feed is processed locally (no cloud) through a multi-stage ML pipeline that detects violations, reads license plates, and either auto-issues challans or escalates uncertain cases to patrol officers.
+
+---
+
+## Status as of 2026-06-20 (read before building the dashboard)
+
+- **Backend**: all endpoints below are real and working against a live SQLite DB — not mocked.
+- **ML models**: helmet classifier (87.4% accuracy) and license-plate detector (88.2% mAP50) are trained and wired into the pipeline — not placeholders.
+- **Live data path is now connected**: running `python ml/demo_pipeline.py --input <image> --backend-url http://localhost:8000` POSTs real detections into `/api/v1/violations/ingest`, so the dashboard's violation feed reflects actual ML output. Before this, the only way to see anything in the dashboard was `/debug/inject-violation` (fake data) — keep that in mind if you built against fake data earlier and numbers look different now.
+- **Not implemented** (build your UI to degrade gracefully, don't assume these exist): cross-camera vehicle re-identification, and federated learning is wired but doesn't actually retrain yet. Neither affects the API shape below.
 
 ---
 
@@ -26,6 +36,9 @@ open http://localhost:8000/docs
 
 # 5. Open frontend dashboard
 open frontend/index.html
+
+# 6. (optional) Feed it real ML detections instead of /debug fakes:
+python ml/demo_pipeline.py --input sample.jpg --backend-url http://localhost:8000
 ```
 
 ---
