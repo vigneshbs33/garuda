@@ -56,13 +56,21 @@ logger = logging.getLogger("garuda.demo")
 
 WEIGHTS_DIR = Path(__file__).parent / "models" / "weights"
 HELMET_WEIGHTS = WEIGHTS_DIR / "helmet_cnn.pt"
-PLATE_WEIGHTS = WEIGHTS_DIR / "plate_yolo.pt"
+# Primary: 52MB YOLOv8m general plate detector (MuhammadMoinFaisal, 25.85M params)
+# Fallback: 5.5MB India-specific YOLO11n fine-tuned on 433 Indian plates
+PLATE_WEIGHTS = WEIGHTS_DIR / "plate_yolov8_moin.pt"
+PLATE_WEIGHTS_FALLBACK = WEIGHTS_DIR / "plate_yolo.pt"
 
 
-def _resolve_weight(path: Path, cli_override: str | None) -> str | None:
+def _resolve_weight(path: Path, cli_override: str | None, fallback: Path | None = None) -> str | None:
     if cli_override:
         return cli_override
-    return str(path) if path.exists() else None
+    if path.exists():
+        return str(path)
+    if fallback and fallback.exists():
+        logger.info("Primary weights not found, using fallback: %s", fallback)
+        return str(fallback)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +133,7 @@ def run_image(args) -> None:
 
     # --- Init modules ---
     helmet_weights = _resolve_weight(HELMET_WEIGHTS, args.helmet_weights)
-    plate_weights  = _resolve_weight(PLATE_WEIGHTS, args.plate_weights)
+    plate_weights  = _resolve_weight(PLATE_WEIGHTS, args.plate_weights, PLATE_WEIGHTS_FALLBACK)
     if helmet_weights:
         logger.info("Using trained helmet classifier: %s", helmet_weights)
     if plate_weights:
@@ -162,7 +170,8 @@ def run_image(args) -> None:
     detections = detector.detect(processed)
     vehicles   = detector.get_vehicles(detections)
     persons    = detector.get_persons(detections)
-    logger.info("      %d vehicles, %d persons detected", len(vehicles), len(persons))
+    phones     = detector.get_phones(detections)
+    logger.info("      %d vehicles, %d persons, %d phones detected", len(vehicles), len(persons), len(phones))
 
     # === STEP 3: Driver state ===
     driver_alerts = []
@@ -175,7 +184,7 @@ def run_image(args) -> None:
 
     # === STEP 4: Violations ===
     logger.info("[4/6] Classifying violations…")
-    all_violations = classifier.check_all(processed, vehicles, persons)
+    all_violations = classifier.check_all(processed, vehicles, persons, phone_detections=phones)
     logger.info("      %d violations found", len(all_violations))
     for v in all_violations:
         logger.info("      → %s | conf=%.2f | severity=%s", v.violation_type.value, v.confidence, v.severity)
@@ -217,7 +226,7 @@ def run_image(args) -> None:
             plate_info=plate_info,
             camera_info=DEMO_CAMERA,
             driver_alerts=[a.to_dict() for a in driver_alerts],
-            processing_info={"time_ms": round(elapsed_ms, 1), "model": "yolo11n"},
+            processing_info={"time_ms": round(elapsed_ms, 1), "model": "yolov8m"},
             violation_id=decision.violation_id,
         )
         logger.info("      Evidence: %s", package["annotated_image_path"])
@@ -273,7 +282,7 @@ def run_video(args) -> None:
     logger.info("GARUDA — Video Pipeline | source=%s", "webcam" if args.webcam else args.input)
 
     helmet_weights = _resolve_weight(HELMET_WEIGHTS, args.helmet_weights)
-    plate_weights  = _resolve_weight(PLATE_WEIGHTS, args.plate_weights)
+    plate_weights  = _resolve_weight(PLATE_WEIGHTS, args.plate_weights, PLATE_WEIGHTS_FALLBACK)
 
     preprocessor  = ImagePreprocessor()
     detector      = VehicleDetector(device="cpu")
@@ -315,8 +324,8 @@ def run_video(args) -> None:
             fps_count   = 0
             fps_timer   = time.time()
 
-        # Every 3rd frame for performance on CPU
-        if frame_idx % 3 != 0:
+        # Every 2nd frame for performance on CPU
+        if frame_idx % 2 != 0:
             continue
 
         # Detect + track
@@ -324,15 +333,25 @@ def run_video(args) -> None:
         detections = detector.detect_with_tracking(processed)
         vehicles   = detector.get_vehicles(detections)
         persons    = detector.get_persons(detections)
+        phones     = detector.get_phones(detections)
         tracker.update(detections, frame_idx)
 
-        # Violations
+        # Violations (pass full frame so MLSignalStateDetector can scan top 40%)
         track_states = {s.track_id: s for s in tracker.active_tracks()}
         violations   = classifier.check_all(processed, vehicles, persons,
-                                             tracker_states=track_states)
+                                             signal_frame=processed,
+                                             tracker_states=track_states,
+                                             phone_detections=phones)
 
-        # Routing
+        # OCR — read plate of each vehicle, keep best result this frame
         plate_info = {"formatted_text": "", "confidence": 0.0, "is_valid": False}
+        for vehicle in vehicles:
+            plate_region = ocr.detect_plate_region(processed, vehicle.bbox)
+            if plate_region is not None and plate_region.size > 0:
+                result = ocr.read_plate(plate_region)
+                if result.confidence > plate_info.get("confidence", 0):
+                    plate_info = result.to_dict()
+
         for v in violations:
             violations_total += 1
             decisions = router.route_batch([v], plate_info, DEMO_CAMERA)

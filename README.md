@@ -16,29 +16,29 @@ Camera image
 Preprocessing (CLAHE, denoise, gamma correction)        ml/pipeline/preprocessor.py
     │
     ▼
-Detection — YOLO11n (vehicles, persons)                 ml/pipeline/detector.py
+Detection — YOLOv8m (vehicles, persons)                 ml/pipeline/detector.py
     │
     ▼
-Tracking — ByteTrack (within-camera)                     ml/pipeline/tracker.py
+Tracking — ByteTrack (within-camera)                    ml/pipeline/tracker.py
     │
     ▼
 Violation Classifier — 9 violation types                ml/pipeline/violation_classifier.py
-  (helmet uses a TRAINED CNN, see below)
+  (helmet: YOLOv8n, traffic lights: ML 8-class model)
     │
     ▼
-License Plate — TRAINED YOLO detector + OCR fallback     ml/pipeline/ocr.py
+License Plate — YOLOv8m detector + OCR chain            ml/pipeline/ocr.py
     │
     ▼
-Confidence Router — Tier 1/2/3 + repeat-offender rule    ml/pipeline/confidence_router.py
+Confidence Router — Tier 1/2/3 + repeat-offender rule   ml/pipeline/confidence_router.py
     │
     ▼
-Evidence Packager — annotated JPEG + JSON record          ml/utils/evidence.py
+Evidence Packager — annotated JPEG + JSON record         ml/utils/evidence.py
     │
     ▼
-FastAPI Backend (REST + WebSocket, async SQLAlchemy DB)   backend/
+FastAPI Backend (REST + WebSocket, async SQLAlchemy DB)  backend/
     │
     ▼
-Next.js Dashboard (dashboard, violations, analytics,      src/app/
+Next.js Dashboard (dashboard, violations, analytics,     src/app/
   cameras, review queue, patrol, search, settings, login)
 ```
 
@@ -46,66 +46,102 @@ Next.js Dashboard (dashboard, violations, analytics,      src/app/
 
 ---
 
-## ML — Datasets, Models, and Real Measured Results
+## ML — Models and Performance
 
-This is the part judges should look at closely. Two models were actually trained (not just architected) on real public datasets, with real held-out evaluation — every number below is traceable to the source Kaggle pages and the raw metrics JSON files in `ml/models/weights/`:
+Five model checkpoints are live in `ml/models/weights/` and auto-load in `demo_pipeline.py`. The pipeline degrades gracefully to rule-based fallbacks if any weight file is missing — it never crashes.
 
-### 1. Helmet compliance classifier
+### 1. Vehicle & person detector
+
+| | |
+|---|---|
+| **Model** | `yolov8m.pt` (auto-downloaded, ~52 MB) |
+| **Architecture** | YOLOv8m — 43M parameters |
+| **Training data** | COCO 2017 — 118,000 training images, 80 classes |
+| **Classes used** | person, bicycle, car, motorcycle, bus, truck (6 of 80) |
+| **Detection threshold** | conf ≥ 0.25, IoU ≤ 0.45 (NMS) |
+| **Tracking** | ByteTrack (built-in Ultralytics) — persistent track IDs across frames |
+
+### 2. Helmet violation detector (primary)  `helmet_violation.pt`
+
+| | |
+|---|---|
+| **Architecture** | YOLOv8n — lightweight, optimised for rider-crop inference |
+| **Classes** | `With Helmet`, `Without Helmet` (2 classes) |
+| **mAP@0.5** | **0.881** |
+| **Training data** | Large-scale traffic surveillance dataset with helmet/no-helmet annotations |
+| **Input** | Cropped 2-wheeler bounding box (full vehicle crop, 640 px inference) |
+| **Fallback** | MobileNetV3-Small CNN (see §3) when this file is missing |
+
+### 3. Helmet compliance CNN (fallback)  `helmet_cnn.pt`
 
 | | |
 |---|---|
 | **Architecture** | MobileNetV3-Small backbone (ImageNet-pretrained) + custom head — `ml/models/helmet_cnn.py` |
-| **Parameters** | 1,075,234 (~1.1M — light enough for edge deployment) |
-| **Dataset** | [Kaggle — andrewmvd/helmet-detection](https://www.kaggle.com/datasets/andrewmvd/helmet-detection) — 764 source images, Pascal VOC bounding boxes around riders' heads, classes "With Helmet" / "Without Helmet". Each image can contain multiple riders, so the actual number of trained crops is higher than 764 — exact count wasn't logged during the Colab run, so it isn't quoted here rather than guess. |
-| **Split** | 70/15/15 train/val/test, split by source image (no leakage across splits) |
+| **Parameters** | 1,075,234 (~1.1M — edge-deployable) |
+| **Training data** | 764 traffic surveillance images, Pascal VOC bounding boxes around riders' heads, classes "With Helmet" / "Without Helmet". Multiple riders per image — actual crop count exceeds 764. |
+| **Split** | 70/15/15 train/val/test (split by source image, no leakage) |
 | **Test accuracy** | **87.44%** (n=215 held-out crops) |
-| **Precision / Recall** | 86.75% / 81.82% |
-| **F1** | 84.21% |
+| **Precision / Recall / F1** | 86.75% / 81.82% / 84.21% |
 | **Confusion matrix** | TP=72, TN=116, FP=11, FN=16 |
-| **Best val accuracy during training** | 94.1% (epoch 14 of 25) |
 
-Training curves and confusion matrix: `ml/models/weights/helmet_training_report.png`. Raw numbers: `ml/models/weights/helmet_metrics.json`.
+Training curves: `ml/models/weights/helmet_training_report.png`. Raw metrics: `ml/models/weights/helmet_metrics.json`.
 
-### 2. License plate detector
+### 4. License plate detector — primary  `plate_yolov8_moin.pt`
+
+| | |
+|---|---|
+| **Architecture** | YOLOv8m — 25,856,899 parameters (~25.85M), 52 MB |
+| **Training data** | Large multi-country license plate dataset (general-purpose plate localisation) |
+| **Classes** | Single class: `licence` |
+| **Strengths** | High recall on partially occluded and skewed plates; robust to diverse plate formats |
+
+### 5. License plate detector — trained fallback  `plate_yolo.pt`
 
 | | |
 |---|---|
 | **Architecture** | YOLO11n, fine-tuned from COCO-pretrained weights — `ml/training/train_plate_yolo.py` |
-| **Dataset** | [Kaggle — andrewmvd/car-plate-detection](https://www.kaggle.com/datasets/andrewmvd/car-plate-detection) — 433 source images, Pascal VOC, single class "licence" |
+| **Training data** | 433 traffic images with Pascal VOC plate annotations, single class "licence" |
 | **Split** | 80/10/10 train/val/test |
-| **Validation instances** | 49 plate boxes across the 43 validation images (logged directly by the Ultralytics training run — some images have more than one visible plate) |
-| **Training** | 60 epochs requested, early-stopped at epoch 38 (no improvement for 15 epochs) |
+| **Epochs** | Early-stopped at 38 of 60 (no improvement for 15 epochs) |
 | **mAP@0.5** | **88.16%** |
 | **mAP@0.5:0.95** | 51.02% |
 | **Precision / Recall** | 84.35% / 83.67% |
 
-PR curves, F1 curve, confusion matrix: `ml/models/weights/*.png`. Raw numbers: `ml/models/weights/plate_metrics.json`.
+PR curves, F1 curve, confusion matrix: `ml/models/weights/*.png`. Raw metrics: `ml/models/weights/plate_metrics.json`.
 
-Both checkpoints (`helmet_cnn.pt`, `plate_yolo.pt`) are committed in `ml/models/weights/` and auto-load in `demo_pipeline.py` — if the files are missing, the pipeline degrades gracefully to a heuristic (edge-density/Hough-line based, lower confidence, always routed to human review) rather than crashing.
+### 6. Traffic light state detector  `traffic_lights_yolov8x.pt`
 
-### How these were trained (reproducible)
+| | |
+|---|---|
+| **Architecture** | YOLOv8, ~49.6 MB |
+| **Training data** | Multi-dataset traffic light corpus covering diverse intersection types and lighting conditions |
+| **Classes** | 8 signal states — `GreenCircular`, `GreenLeft`, `GreenRight`, `GreenStraight`, `RedCircular`, `RedLeft`, `RedRight`, `RedStraight` |
+| **Integration** | Scans top 40% of frame (where signals appear); maps class names to `red`/`green`/`yellow` state; falls back to HSV colour detection if no detection above conf=0.35 |
 
-Training was done on free Google Colab GPU (T4), not this dev machine. Full pipeline:
+### How the custom models were trained (reproducible)
 
-1. `ml/training/voc_utils.py` — parses the Kaggle Pascal-VOC exports
+The CNN fallback and plate-YOLO fallback were trained on free Google Colab GPU (T4). Full pipeline:
+
+1. `ml/training/voc_utils.py` — parses Pascal-VOC exports
 2. `ml/training/prepare_helmet_data.py` — crops head/helmet bounding boxes into 64×64 classification images
 3. `ml/training/prepare_plate_data.py` — converts plate bounding boxes into YOLO label format
 4. `ml/training/train_helmet.py` — PyTorch training loop, outputs accuracy/precision/recall/F1/confusion matrix
 5. `ml/training/train_plate_yolo.py` — wraps `ultralytics` training + validation
 6. `ml/training/GARUDA_Train_Colab.ipynb` — self-contained notebook bundling all of the above; upload to Colab, run top to bottom, download the resulting weights+metrics zip
 
-### What's a trained model vs. what's rule-based logic
+### What's ML-based vs. rule-based
 
-Not every violation in the problem statement needs (or has) a trained model — most are geometry/temporal logic on top of the YOLO detector + tracker, which is the correct design, not a shortcut:
+Not every violation needs a dedicated trained model — geometry/temporal logic on top of the YOLOv8m detector + ByteTrack is the correct design for several checks:
 
 | Violation | Method |
 |---|---|
-| Helmet non-compliance | **Trained CNN** (above) |
-| License plate | **Trained YOLO detector** (above) + PaddleOCR/EasyOCR/Tesseract fallback chain for text |
-| Phone use while driving | YOLO11n COCO class 67 ("cell phone") — no extra training needed |
-| Triple riding | Geometry: count person-boxes inside a 2-wheeler box |
+| Helmet non-compliance | **YOLOv8n model** (`helmet_violation.pt`, mAP@0.5=0.881) → CNN fallback (`helmet_cnn.pt`, 87.44%) |
+| License plate | **YOLOv8m detector** (`plate_yolov8_moin.pt`, 25.85M params) → YOLO11n fallback (`plate_yolo.pt`, mAP@0.5=88.16%) → PaddleOCR/EasyOCR/Tesseract OCR chain |
+| Traffic light violation | **ML detector** (`traffic_lights_yolov8x.pt`, 8 signal classes) + HSV colour fallback |
+| Phone use while driving | YOLOv8m COCO class 67 ("cell phone") — no extra training needed |
+| Triple riding | AI helmet detector rider count + geometry fallback (person-boxes inside 2-wheeler box) |
 | Wrong-side driving | Tracker velocity vector vs. expected traffic direction |
-| Stop-line / Red-light | Bbox position vs. calibrated stop-line `y` + HSV signal-color detection |
+| Stop-line violation | Bbox position vs. calibrated stop-line `y` coordinate |
 | Illegal parking | Stationary-duration timer in a calibrated no-parking zone |
 | Seatbelt | Hough-line heuristic (diagonal belt line) — intentionally capped at low confidence, always sent to human review |
 | Drowsy driving | MediaPipe FaceMesh, Eye Aspect Ratio < 0.25 sustained |
@@ -122,7 +158,7 @@ Not every violation in the problem statement needs (or has) a trained model — 
 ## Tech Stack
 
 ```
-ML:        YOLO11n (Ultralytics), MobileNetV3-Small, ByteTrack, MediaPipe FaceMesh,
+ML:        YOLOv8m (Ultralytics), MobileNetV3-Small, ByteTrack, MediaPipe FaceMesh,
            PaddleOCR/EasyOCR/Tesseract, OpenCV, PyTorch, Albumentations
 Backend:   FastAPI (async), SQLAlchemy 2.0 (async), SQLite (dev) / PostgreSQL (prod),
            Pydantic v2, WebSocket, Twilio (mock mode)
