@@ -1,4 +1,8 @@
 
+  bro serch up wt they actuall use to to get licency plane     
+  
+  
+  
   Industry standard = YOLOv8 for plate detection + EasyOCR for text reading
 
   That's exactly the combo most used — GeeksforGeeks ANPR tutorial
@@ -12,7 +16,7 @@
   We already have EasyOCR installed. The fix is to switch primary OCR from     
   fast-plate-ocr → EasyOCR and scan the full vehicle crop (not just the tiny   
   plate sub-region). Want me to make that switch now?
-
+ 
   Sources:
   - Indian-Number-Plate-Recognition (YOLOv4 + keras-ocr)
   (https://github.com/keshavoct98/Indian-Number-Plate-Recognition)
