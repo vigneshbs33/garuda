@@ -146,7 +146,7 @@ class HelmetClassifier:
             from ml.models.helmet_cnn import HelmetCNN
 
             model = HelmetCNN(pretrained_mobilenet=True)
-            state_dict = torch.load(path, map_location="cpu")
+            state_dict = torch.load(path, map_location="cpu", weights_only=True)
             model.load_state_dict(state_dict)
             model.eval()
             self._model = model

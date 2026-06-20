@@ -4,15 +4,16 @@ __pycache__/
 venv/
 .venv/
 
-# ML artifacts (large binaries / generated — not source)
-*.pt
+# Auto-downloaded / regenerable model artifacts — NOT the trained weights in ml/models/weights/
+/yolo11n.pt
 *.onnx
 *.engine
+*.zip
 datasets/
 data/raw/
-models/weights/
 runs/
 evidence/
+test_assets/
 
 # Env
 .env
