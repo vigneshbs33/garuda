@@ -6,6 +6,7 @@ venv/
 
 # Auto-downloaded / regenerable model artifacts — NOT the trained weights in ml/models/weights/
 /yolo11n.pt
+yolov8m.pt
 *.onnx
 *.engine
 *.zip

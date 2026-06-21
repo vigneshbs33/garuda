@@ -175,8 +175,10 @@ class VehicleDetector:
                 self._model = YOLO(model_path)
                 logger.info("Loaded model: %s", model_path)
             else:
-                self._model = YOLO("yolov8m.pt")   # downloads ~52 MB on first run
-                logger.info("Loaded pretrained yolov8m.pt (auto-downloaded)")
+                # Use local copy in weights dir; ultralytics auto-downloads if missing
+                local = Path(__file__).parent.parent / "models" / "weights" / "yolov8m.pt"
+                self._model = YOLO(str(local) if local.exists() else "yolov8m.pt")
+                logger.info("Loaded yolov8m from %s", local if local.exists() else "ultralytics cache")
 
         except ImportError as exc:
             raise ImportError(
