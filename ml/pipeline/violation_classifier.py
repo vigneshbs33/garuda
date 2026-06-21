@@ -239,8 +239,8 @@ class AIHelmetViolationDetector:
         self._fallback = HelmetClassifier(helmet_weights_path)
         # Cache full-image results so multiple vehicles share one inference call
         self._cached_image_id: Optional[int] = None
-        self._cached_heads:    List[List[float]] = []   # boxes where head (no helmet) found
-        self._cached_helmets:  List[List[float]] = []   # boxes where helmet found
+        self._cached_heads:    List[Tuple[List[float], float]] = []   # (bbox, conf) — no helmet
+        self._cached_helmets:  List[Tuple[List[float], float]] = []   # (bbox, conf) — helmet worn
         self._try_load()
 
     def _try_load(self) -> None:
@@ -272,22 +272,39 @@ class AIHelmetViolationDetector:
                 for box in result.boxes:
                     name = result.names[int(box.cls[0])]
                     xyxy = box.xyxy[0].tolist()
+                    conf = float(box.conf[0])
                     if name == self._NO_HELMET_CLASS:
-                        self._cached_heads.append(xyxy)
+                        self._cached_heads.append((xyxy, conf))
                     elif name == self._HELMET_CLASS:
-                        self._cached_helmets.append(xyxy)
+                        self._cached_helmets.append((xyxy, conf))
         except Exception as e:
             logger.warning("Helmet full-image inference failed: %s", e)
 
     def _head_above_vehicle(self, head_box: List[float], veh_box: List[float]) -> bool:
-        """True if head centre is horizontally inside vehicle and above vehicle's mid-line."""
+        """
+        True if a head plausibly belongs to a rider of this vehicle: horizontally
+        within the bike's own width (scaled margin, not a flat pixel offset — a flat
+        +-20px margin is too loose for small/distant vehicles and lets bystanders'
+        heads in a crowd get matched), and vertically in the narrow band just above
+        the vehicle's top edge where a seated rider's head actually sits — not merely
+        "anywhere above the vehicle's midline", which catches pedestrians and signage.
+        """
         hx1, hy1, hx2, hy2 = head_box
         vx1, vy1, vx2, vy2 = veh_box
+        v_width  = max(vx2 - vx1, 1.0)
+        v_height = max(vy2 - vy1, 1.0)
+
         hcx = (hx1 + hx2) / 2
         hcy = (hy1 + hy2) / 2
-        if not (vx1 - 20 <= hcx <= vx2 + 20):
+
+        margin = max(0.20 * v_width, 10.0)
+        if not (vx1 - margin <= hcx <= vx2 + margin):
             return False
-        return hcy <= (vy1 + vy2) / 2
+
+        # Rider head zone: from slightly above the vehicle's top edge down to its midline.
+        band_top    = vy1 - 0.9 * v_height
+        band_bottom = vy1 + 0.5 * v_height
+        return band_top <= hcy <= band_bottom
 
     def detect(
         self,
@@ -317,14 +334,14 @@ class AIHelmetViolationDetector:
             self._run_full_image(image)
             veh_box = [x1, y1, x2, y2]
 
-            associated_heads = [h for h in self._cached_heads
-                                if self._head_above_vehicle(h, veh_box)]
-            rider_count = len(associated_heads) + len(
-                [h for h in self._cached_helmets if self._head_above_vehicle(h, veh_box)]
-            )
+            associated_heads = [(box, conf) for box, conf in self._cached_heads
+                                if self._head_above_vehicle(box, veh_box)]
+            associated_helmets = [(box, conf) for box, conf in self._cached_helmets
+                                  if self._head_above_vehicle(box, veh_box)]
+            rider_count = len(associated_heads) + len(associated_helmets)
 
             if associated_heads:
-                best_conf = 0.50
+                best_conf = max(conf for _, conf in associated_heads)
                 return True, best_conf, max(rider_count, 1)
 
             if rider_count == 0:
@@ -485,6 +502,13 @@ class ViolationClassifier:
     stop_line_y        : Y-pixel coordinate of the stop line (must be calibrated)
     parking_zones      : List of (x1,y1,x2,y2) no-parking zone rectangles
     helmet_weights_path: Optional path to trained helmet CNN weights
+    wrong_side_lane     : Which half of the frame is the "wrong" lane for oncoming
+                          traffic at this camera — "left" or "right". Depends on
+                          which side of the road the camera is mounted on, not a
+                          universal constant; must be calibrated per camera like
+                          stop_line_y. Defaults to "left" (the common case for a
+                          camera facing oncoming near-lane traffic on a left-hand
+                          drive road).
     """
 
     _SEATBELT_WEIGHTS = Path(__file__).parent.parent / "models" / "weights" / "seatbelt_classifier.pt"
@@ -494,9 +518,11 @@ class ViolationClassifier:
         stop_line_y: int = 400,
         parking_zones: Optional[List[List[int]]] = None,
         helmet_weights_path: Optional[str] = None,
+        wrong_side_lane: str = "left",
     ) -> None:
         self.stop_line_y = stop_line_y
         self.parking_zones: List[List[int]] = parking_zones or []
+        self.wrong_side_lane = wrong_side_lane if wrong_side_lane in ("left", "right") else "left"
         self.helmet_clf = HelmetClassifier(helmet_weights_path)
         self.ai_helmet = AIHelmetViolationDetector(helmet_weights_path)
         self.signal_det = MLSignalStateDetector()
@@ -547,28 +573,100 @@ class ViolationClassifier:
     # 2. Triple riding
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _compute_iou(box1: List[float], box2: List[float]) -> float:
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        return intersection / (area1 + area2 - intersection + 1e-6)
+
+    @classmethod
+    def associate_riders_with_vehicles(
+        cls,
+        vehicles: List[Detection],
+        persons: List[Detection],
+        iou_threshold: float = 0.05,
+        max_riders: int = 4,
+    ) -> Dict[int, List[Detection]]:
+        """
+        Assign each person to at most one nearby two-wheeler, ranked by distance.
+
+        Ported from the rider-vehicle association heuristic in
+        temp/AI_Traffic_Violation_Detection_triple_riding_detection/detect_triple_riding.py
+        (group_riders_with_vehicles). A person is a rider candidate for a vehicle if
+        either their box overlaps the vehicle (IoU) or they're horizontally aligned
+        with the vehicle AND their feet (bbox bottom) fall within the vehicle's
+        vertical span — this catches riders whose torso/head extends above the bike's
+        own bbox, which a simple "center inside vehicle bbox" check misses.
+
+        Returns {id(vehicle): [rider Detection, ...]}, keyed by Python object identity
+        since vehicles/persons are rebuilt fresh each frame.
+        """
+        rider_map: Dict[int, List[Detection]] = {}
+        used_person_idx: set = set()
+
+        for vehicle in vehicles:
+            vx1, vy1, vx2, vy2 = vehicle.bbox
+            v_cx, v_cy = vehicle.center
+            v_width = max(vx2 - vx1, 1.0)
+            v_height = max(vy2 - vy1, 1.0)
+
+            candidates: List[Tuple[Detection, int, float]] = []
+            for idx, person in enumerate(persons):
+                if idx in used_person_idx:
+                    continue
+
+                p_cx, p_cy = person.center
+                dist = ((v_cx - p_cx) ** 2 + (v_cy - p_cy) ** 2) ** 0.5 / max(v_width, v_height)
+                horiz_dist = abs(p_cx - v_cx) / v_width
+
+                iou = cls._compute_iou(vehicle.bbox, person.bbox)
+
+                p_bottom = person.bbox[3]
+                top_margin = 0.05 * v_height
+                bottom_margin = 0.30 * v_height
+                bottom_overlap = (p_bottom >= (vy1 - top_margin)) and (p_bottom <= (vy2 + bottom_margin))
+
+                if iou > iou_threshold or (horiz_dist < 1.2 and bottom_overlap):
+                    candidates.append((person, idx, dist))
+
+            candidates.sort(key=lambda c: c[2])
+            riders: List[Detection] = []
+            for person, idx, _ in candidates[:max_riders]:
+                riders.append(person)
+                used_person_idx.add(idx)
+
+            rider_map[id(vehicle)] = riders
+
+        return rider_map
+
     def check_triple_riding(
         self,
         vehicle: Detection,
         persons: List[Detection],
-        image: Optional[np.ndarray] = None,
+        rider_map: Optional[Dict[int, List[Detection]]] = None,
     ) -> Optional[ViolationResult]:
         """
-        Count persons on a 2-wheeler.
-        When AICity model is active, uses per-rider position detection (more accurate).
-        Otherwise counts person bboxes overlapping the vehicle.
+        Count persons on a 2-wheeler using the IoU + position rider-vehicle
+        association heuristic (see associate_riders_with_vehicles) — independent
+        of the helmet model. This mirrors the approach in
+        temp/AI_Traffic_Violation_Detection_triple_riding_detection/detect_triple_riding.py
+        (group_riders_with_vehicles): person + motorbike detections from the main
+        detector are grouped by IoU/position, not by the helmet classifier's head count.
         """
         if not vehicle.is_two_wheeler:
             return None
 
-        # AICity model path: rider_count comes from 9-class detection
-        if image is not None and self.ai_helmet._model is not None:
-            _, _, rider_count = self.ai_helmet.detect(image, vehicle)
+        if rider_map is not None:
+            rider_count = len(rider_map.get(id(vehicle), []))
         else:
-            # Fallback: count persons whose center is inside vehicle bbox
-            rider_count = sum(
-                1 for p in persons if vehicle.contains_point(*p.center)
-            )
+            # Last-resort fallback if no rider_map was precomputed
+            rider_count = len(self.associate_riders_with_vehicles([vehicle], persons).get(id(vehicle), []))
 
         if rider_count >= 3:
             conf = min(0.95, 0.60 + 0.10 * rider_count)
@@ -743,7 +841,11 @@ class ViolationClassifier:
         Detect missing seatbelt using RISEFyolov11s-seatbelt classifier.
 
         Flow:
-          1. Skip non-four-wheelers and tiny / square bboxes (autos, bikes)
+          1. Skip non-four-wheelers, tiny/square bboxes (autos, bikes), and
+             frame-filling bboxes (trucks/buses shot close-up where the box
+             covers most of the image — there's no recognisable windshield
+             ROI in that crop, just background/cab/cargo, and feeding that
+             into the classifier produces a meaningless but overconfident result)
           2. Crop windshield + driver-seat ROI (upper 60%, driver side 70%)
           3. CLAHE + gamma correction for glare/reflection
           4. Feed crop to YOLOv11s classifier → seat_belt | no_seatbelt
@@ -756,6 +858,11 @@ class ViolationClassifier:
         vh, vw = y2 - y1, x2 - x1
 
         if vw < 110 or vh < 80:
+            return None
+        # Skip frame-filling boxes — no usable windshield ROI in a crop that's
+        # mostly background/cab/cargo (common on trucks/buses shot up close)
+        img_h, img_w = image.shape[:2]
+        if (vw * vh) > 0.35 * (img_w * img_h):
             return None
         # Skip square/tall bboxes — likely autos or misclassified bikes
         if vw < vh * 0.75:
@@ -905,6 +1012,9 @@ class ViolationClassifier:
         if signal_frame is not None:
             signal_state, signal_conf = self.signal_det.detect(signal_frame)
 
+        two_wheelers = [v for v in vehicles if v.is_two_wheeler]
+        rider_map = self.associate_riders_with_vehicles(two_wheelers, persons)
+
         for vehicle in vehicles:
             tid = vehicle.track_id
 
@@ -914,7 +1024,7 @@ class ViolationClassifier:
                 if v:
                     results.append(v)
 
-                v = self.check_triple_riding(vehicle, persons, image)
+                v = self.check_triple_riding(vehicle, persons, rider_map=rider_map)
                 if v:
                     results.append(v)
 
@@ -961,7 +1071,7 @@ class ViolationClassifier:
                 if v:
                     results.append(v)
 
-                v = self._check_stop_line_static(vehicle.bbox, signal_state)
+                v = self._check_stop_line_static(vehicle.bbox, signal_state, signal_conf)
                 if v:
                     results.append(v)
 
@@ -1006,19 +1116,23 @@ class ViolationClassifier:
         self,
         bbox: List[float],
         signal_state: str,
+        signal_conf: float,
     ) -> Optional[ViolationResult]:
         """Stop-line: vehicle front past stop line while signal is red or yellow."""
         if signal_state.lower() not in ("red", "yellow"):
+            return None
+        if signal_conf < 0.55:
             return None
         if bbox[3] <= self.stop_line_y:
             return None
         return ViolationResult.create(
             ViolationType.STOP_LINE_VIOLATION,
-            confidence=0.80,
+            confidence=round(min(0.85, 0.50 + 0.40 * signal_conf), 4),
             bbox=bbox,
             metadata={
                 "stop_line_y": self.stop_line_y,
                 "signal": signal_state,
+                "signal_confidence": round(signal_conf, 3),
                 "method": "static_position",
             },
         )
@@ -1031,42 +1145,44 @@ class ViolationClassifier:
         """
         Wrong-side heuristic for static images.
 
-        Uses lane-line detection on the full frame row near the vehicle centroid.
-        Falls back to road-centre split: vehicles in the left half of frame
-        heading toward camera (aspect ratio tall) flagged as wrong-side candidates.
+        A single still frame has no velocity vector, so there's no way to directly
+        observe heading — this is a position-only proxy, not lane-line detection
+        (there was no actual line detection here before; the docstring was wrong).
+        It assumes the wrong-side lane for this camera is `self.wrong_side_lane`
+        ("left" or "right" half of frame) — a per-camera calibration setting, same
+        category as stop_line_y, not a universal rule. Flags vehicles that are
+        both clearly inside that half (not near the frame edge, to avoid catching
+        parked/turning vehicles) and large enough to be confidently close to the
+        camera (small/distant boxes are too noisy to call this off position alone).
 
-        Only fires when confidence is high enough to avoid false positives on
-        legal U-turns, parking, etc.
+        Only fires at moderate confidence (0.60) — this is the weakest of the four
+        static fallbacks since it has no real heading signal; treat positives as
+        Tier-2 candidates for human review, not auto-challan material.
         """
         if frame_width <= 0:
             return None
 
         cx = (bbox[0] + bbox[2]) / 2
-        cy = (bbox[1] + bbox[3]) / 2
         vw = bbox[2] - bbox[0]
         vh = bbox[3] - bbox[1]
 
-        # Skip parked / edge vehicles — must be clearly in wrong lane
+        # Skip parked / edge vehicles — must be clearly within the wrong-side half
         road_left  = frame_width * 0.10
         road_right = frame_width * 0.90
         if cx < road_left or cx > road_right:
             return None
 
         road_centre = frame_width * 0.50
-        in_left_half = cx < road_centre
-
-        # India: traffic flows on left side of road. Vehicles occupying right half
-        # coming toward camera (bbox taller, near bottom) are legitimate.
-        # Flag only vehicles clearly in the right half driving toward camera
-        # AND positioned in the upper portion of frame (coming from far side).
-        if not in_left_half:
+        in_flagged_half = cx < road_centre if self.wrong_side_lane == "left" else cx > road_centre
+        if not in_flagged_half:
             return None
 
-        # Additional heuristic: vehicle must be large enough to be close
+        # Vehicle must be large enough in frame to be confidently close, not a
+        # distant/background vehicle where position noise dominates
         if vw * vh < 8000:
             return None
 
-        conf = 0.60  # Moderate — static heuristic only
+        conf = 0.60  # Moderate — position-only proxy, no heading signal
         return ViolationResult.create(
             ViolationType.WRONG_SIDE_DRIVING,
             confidence=conf,
@@ -1074,6 +1190,7 @@ class ViolationClassifier:
             metadata={
                 "centre_x": round(cx, 1),
                 "frame_width": frame_width,
+                "wrong_side_lane": self.wrong_side_lane,
                 "method": "static_lane_heuristic",
             },
         )

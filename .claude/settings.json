@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf result)",
+      "Bash(mkdir result *)",
+      "Bash(python ml/demo_pipeline.py --input \"test/screenshot_1146AM.png\" --output result)",
+      "Bash(mv result/demo_result.jpg result/screenshot1_result.jpg)",
+      "Bash(rm -rf result/annotated result/json result/raw)",
+      "Bash(python ml/demo_pipeline.py --input \"test/screenshot_1146AM.png\" --output result --verbose)",
+      "Bash(python ml/demo_pipeline.py --input \"test/screenshot_1146AM.png\" --output result --driver-state --verbose)",
+      "Bash(echo \"EXIT1:$?\")",
+      "Bash(rm -f result_run1.log)",
+      "Bash(python ml/demo_pipeline.py --input \"test/screenshot_859PM.png\" --output result --verbose)",
+      "Bash(python run_full_report.py \"test/screenshot_1146AM.png\" screenshot1)",
+      "Bash(rm -f screenshot1_err.log screenshot2_err.log)",
+      "Bash(python run_full_report.py \"test/screenshot_859PM.png\" screenshot2)",
+      "Bash(echo \"EXIT2:$?\")",
+      "Bash(rm -f err.log)"
+    ]
+  }
+}

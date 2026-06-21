@@ -82,7 +82,18 @@
       "Bash(grep -v \"^$\\\\|WARNING\\\\|Ultralytics\\\\|YOLO\\\\|Model\\\\|Fusing\\\\|Speed\\\\|Results\")",
       "Bash(grep -v \"^$\\\\|Ultralytics\\\\|Fusing\\\\|YOLO\\\\|image 1\\\\|Speed\\\\|ultralytics\")",
       "Bash(grep -v \"Ultralytics\\\\|Fusing\\\\|YOLO\\\\|WARNING\\\\|^$\")",
-      "Bash(grep -v \"Ultralytics\\\\|Fusing\\\\|YOLO\\\\|image 1\\\\|Speed\\\\|^$\\\\|ultralytics\")"
+      "Bash(grep -v \"Ultralytics\\\\|Fusing\\\\|YOLO\\\\|image 1\\\\|Speed\\\\|^$\\\\|ultralytics\")",
+      "Bash(find . -iname \"*.pt\" -o -iname \"*.pth\" -o -iname \"*.onnx\")",
+      "Bash(find . -iname \"runs\" -o -iname \"weights\")",
+      "Bash(cat datasets/triple_riding/data.yaml)",
+      "Bash(python ml/demo_pipeline.py --input \"temp/AI_Traffic_Violation_Detection_triple_riding_detection/datasets/triple_riding/images/train/image1.jpg\" --output evidence_test1)",
+      "Read(//tmp/**)",
+      "Bash(rm -rf evidence_test1 evidence_test2)",
+      "Bash(ls -d evidence*)",
+      "Bash(python ml/demo_pipeline.py --input \"test/screenshot_1146AM.png\" --output result --verbose)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(mv result/demo_result.jpg result/demo_result_screenshot1.jpg)",
+      "Bash(python ml/demo_pipeline.py --input \"test/screenshot_859PM.png\" --output result --verbose)"
     ]
   }
 }
