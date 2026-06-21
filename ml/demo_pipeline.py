@@ -56,10 +56,11 @@ logger = logging.getLogger("garuda.demo")
 
 WEIGHTS_DIR = Path(__file__).parent / "models" / "weights"
 HELMET_WEIGHTS = WEIGHTS_DIR / "helmet_cnn.pt"
-# Primary: 52MB YOLOv8m general plate detector (MuhammadMoinFaisal, 25.85M params)
-# Fallback: 5.5MB India-specific YOLO11n fine-tuned on 433 Indian plates
-PLATE_WEIGHTS = WEIGHTS_DIR / "plate_yolov8_moin.pt"
-PLATE_WEIGHTS_FALLBACK = WEIGHTS_DIR / "plate_yolo.pt"
+# Stage-1 plate detector: Koushi (6.2MB) — best spatial coverage
+# Stage-2 plate detector: YasirFaiz (6.2MB) — confirms crop (auto-loaded by PlateOCR)
+# Legacy fallback: 52MB moin model passed if Koushi missing
+PLATE_WEIGHTS = WEIGHTS_DIR / "plate_koushi.pt"
+PLATE_WEIGHTS_FALLBACK = WEIGHTS_DIR / "plate_yolov8_moin.pt"
 
 
 def _resolve_weight(path: Path, cli_override: str | None, fallback: Path | None = None) -> str | None:

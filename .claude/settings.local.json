@@ -73,7 +73,14 @@
       "PowerShell(python -c \"import easyocr; print\\('easyocr OK'\\)\" 2>&1)",
       "Bash(pip search *)",
       "Bash(grep -v \"^$\")",
-      "Bash(dir \"D:\\\\vignesh\\\\files\\\\Personal\\\\Hackthon\\\\flipkart_Gridlock2\\\\GARUDA\")"
+      "Bash(dir \"D:\\\\vignesh\\\\files\\\\Personal\\\\Hackthon\\\\flipkart_Gridlock2\\\\GARUDA\")",
+      "PowerShell(Get-ChildItem D:\\\\vignesh\\\\files\\\\Personal\\\\Hackthon\\\\flipkart_Gridlock2\\\\GARUDA\\\\ml\\\\models\\\\weights -ErrorAction SilentlyContinue | Select-Object Name, @{N='SizeMB';E={[math]::Round\\($_.Length/1MB,1\\)}})",
+      "PowerShell(Get-ChildItem D:\\\\vignesh\\\\files\\\\Personal\\\\Hackthon\\\\flipkart_Gridlock2\\\\GARUDA\\\\ml\\\\models -Recurse | Select-Object Name, @{N='SizeMB';E={[math]::Round\\($_.Length/1MB,1\\)}})",
+      "PowerShell(Get-ChildItem D:\\\\vignesh\\\\files\\\\Personal\\\\Hackthon\\\\flipkart_Gridlock2\\\\GARUDA\\\\temp | Select-Object Name, @{N='SizeMB';E={[math]::Round\\($_.Length/1MB,1\\)}})",
+      "Read(//mnt/d/vignesh/files/Personal/Hackthon/flipkart_Gridlock2/GARUDA/**)",
+      "Read(//mnt/d/vignesh/files/Personal/Hackthon/flipkart_Gridlock2/GARUDA/ml/**)",
+      "Bash(grep -v \"^$\\\\|WARNING\\\\|Ultralytics\\\\|YOLO\\\\|Model\\\\|Fusing\\\\|Speed\\\\|Results\")",
+      "Bash(grep -v \"^$\\\\|Ultralytics\\\\|Fusing\\\\|YOLO\\\\|image 1\\\\|Speed\\\\|ultralytics\")"
     ]
   }
 }

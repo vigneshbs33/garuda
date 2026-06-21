@@ -267,7 +267,7 @@ class AIHelmetViolationDetector:
         self._cached_helmets  = []
 
         try:
-            results = self._model.predict(image, conf=0.25, iou=0.45, verbose=False)
+            results = self._model.predict(image, conf=0.15, iou=0.45, verbose=False)
             for result in results:
                 for box in result.boxes:
                     name = result.names[int(box.cls[0])]

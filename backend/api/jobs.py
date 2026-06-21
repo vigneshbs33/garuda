@@ -55,9 +55,9 @@ def _ensure_ml():
         from ml.pipeline.violation_classifier import ViolationClassifier
 
         WEIGHTS_DIR = Path(__file__).parent.parent.parent / "ml" / "models" / "weights"
-        # Use the larger, more accurate plate model
-        PLATE_WEIGHTS = str(WEIGHTS_DIR / "plate_yolov8_moin.pt") if (WEIGHTS_DIR / "plate_yolov8_moin.pt").exists() else (
-            str(WEIGHTS_DIR / "plate_yolo.pt") if (WEIGHTS_DIR / "plate_yolo.pt").exists() else None
+        # 2-stage plate pipeline: Koushi (Stage-1) + YasirFaiz (Stage-2, auto-loaded by PlateOCR)
+        PLATE_WEIGHTS = str(WEIGHTS_DIR / "plate_koushi.pt") if (WEIGHTS_DIR / "plate_koushi.pt").exists() else (
+            str(WEIGHTS_DIR / "plate_yolov8_moin.pt") if (WEIGHTS_DIR / "plate_yolov8_moin.pt").exists() else None
         )
         # helmet_best.pt = JarvanLee yolov8m full-image detector (replaces non-working helmet_violation.pt)
         HELMET_WEIGHTS = str(WEIGHTS_DIR / "helmet_cnn.pt") if (WEIGHTS_DIR / "helmet_cnn.pt").exists() else None

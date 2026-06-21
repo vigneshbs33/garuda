@@ -30,9 +30,9 @@ try:
 
     WEIGHTS_DIR = Path(__file__).parent.parent.parent / "ml" / "models" / "weights"
     HELMET_WEIGHTS = str(WEIGHTS_DIR / "helmet_cnn.pt") if (WEIGHTS_DIR / "helmet_cnn.pt").exists() else None
-    # Use the larger, more accurate plate model (49.6 MB) with fallback to small one
-    PLATE_WEIGHTS = str(WEIGHTS_DIR / "plate_yolov8_moin.pt") if (WEIGHTS_DIR / "plate_yolov8_moin.pt").exists() else (
-        str(WEIGHTS_DIR / "plate_yolo.pt") if (WEIGHTS_DIR / "plate_yolo.pt").exists() else None
+    # 2-stage plate pipeline: Koushi (Stage-1) + YasirFaiz (Stage-2, auto-loaded by PlateOCR)
+    PLATE_WEIGHTS = str(WEIGHTS_DIR / "plate_koushi.pt") if (WEIGHTS_DIR / "plate_koushi.pt").exists() else (
+        str(WEIGHTS_DIR / "plate_yolov8_moin.pt") if (WEIGHTS_DIR / "plate_yolov8_moin.pt").exists() else None
     )
 
     logger.info("Initializing real ML pipeline models: helmet=%s, plate=%s", HELMET_WEIGHTS, PLATE_WEIGHTS)

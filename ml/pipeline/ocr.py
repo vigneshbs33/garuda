@@ -115,28 +115,57 @@ class PlateOCR:
 
     Engine priority: PaddleOCR → EasyOCR → Tesseract → Heuristic only
 
+    Plate detection uses a 2-stage YOLO pipeline:
+      Stage 1 — Koushi (plate_koushi.pt): locates plate bbox in vehicle crop
+      Stage 2 — YasirFaiz (plate_yasir.pt): confirms on the Stage 1 crop
+      Detections below MIN_PLATE_CONF are dropped (eliminates headlight FP)
+
     Parameters
     ----------
     use_gpu : Enable GPU acceleration (auto-disabled if CUDA unavailable)
+    plate_detector_weights : Optional override for Stage 1 model path
     """
+
+    # 2-stage model paths (auto-resolved relative to this file)
+    _WEIGHTS_DIR   = Path(__file__).parent.parent / "models" / "weights"
+    _STAGE1_WEIGHTS = _WEIGHTS_DIR / "plate_koushi.pt"   # Koushi — better spatial coverage
+    _STAGE2_WEIGHTS = _WEIGHTS_DIR / "plate_yasir.pt"    # YasirFaiz — refines on crop
+    _STAGE1_CONF   = 0.05    # low to catch all candidates
+    _STAGE2_CONF   = 0.05    # low — we take max(stage1, stage2)
+    _MIN_PLATE_CONF = 0.15   # final gate — drops headlight / windshield false positives
 
     def __init__(self, use_gpu: bool = False, plate_detector_weights: Optional[str] = None) -> None:
         self.use_gpu = use_gpu
         self._engine_name: str = "none"
         self._ocr = None
-        self._plate_detector = None
+        self._plate_detector  = None   # Stage 1
+        self._stage2_detector = None   # Stage 2
         self._init_engine()
-        if plate_detector_weights:
-            self._load_plate_detector(plate_detector_weights)
+        self._load_plate_detectors(plate_detector_weights)
 
-    def _load_plate_detector(self, weights_path: str) -> None:
-        """Load a fine-tuned YOLO11n plate-bbox detector (see ml/training/train_plate_yolo.py)."""
+    def _load_plate_detectors(self, stage1_override: Optional[str] = None) -> None:
+        """Load Stage-1 (Koushi) and Stage-2 (YasirFaiz) plate detectors."""
         try:
             from ultralytics import YOLO  # type: ignore
-            self._plate_detector = YOLO(weights_path)
-            logger.info("Plate detector loaded (trained YOLO): %s", weights_path)
+
+            # Stage 1 — Koushi
+            s1_path = stage1_override or (str(self._STAGE1_WEIGHTS) if self._STAGE1_WEIGHTS.exists() else None)
+            if s1_path:
+                self._plate_detector = YOLO(s1_path)
+                logger.info("Plate Stage-1 (Koushi) loaded: %s", Path(s1_path).name)
+            else:
+                logger.warning("plate_koushi.pt not found — falling back to contour heuristic")
+
+            # Stage 2 — YasirFaiz (optional, used for crop confirmation)
+            if self._STAGE2_WEIGHTS.exists():
+                self._stage2_detector = YOLO(str(self._STAGE2_WEIGHTS))
+                logger.info("Plate Stage-2 (YasirFaiz) loaded: %s", self._STAGE2_WEIGHTS.name)
         except Exception as e:
             logger.warning("Could not load plate detector weights (%s). Using contour heuristic.", e)
+
+    def _load_plate_detector(self, weights_path: str) -> None:
+        """Legacy single-model loader kept for backwards compatibility."""
+        self._load_plate_detectors(stage1_override=weights_path)
 
     # ------------------------------------------------------------------
     # Engine initialisation
@@ -435,27 +464,78 @@ class PlateOCR:
         image: np.ndarray,
         vehicle_bbox: List[float],
     ) -> Optional[np.ndarray]:
-        """Run the fine-tuned plate detector on the vehicle crop, return the highest-confidence plate crop."""
+        """
+        2-Stage plate detection pipeline:
+          Stage 1 — Koushi runs on lower 50% of vehicle crop → finds candidate plate bboxes
+          Stage 2 — YasirFaiz runs on each Stage-1 crop → confirms or rejects
+          Confidence gate: drop anything below _MIN_PLATE_CONF to eliminate FP (headlights etc.)
+          Returns the best enhanced plate crop ready for OCR.
+        """
         x1, y1, x2, y2 = map(int, vehicle_bbox)
-        vehicle_crop = image[max(0, y1):y2, max(0, x1):x2]
-        if vehicle_crop.size == 0:
+        # Plate is always in lower half of vehicle bbox
+        crop_y1 = y1 + int((y2 - y1) * 0.50)
+        vehicle_lower = image[max(0, crop_y1):y2, max(0, x1):x2]
+        if vehicle_lower.size == 0:
             return None
 
-        results = self._plate_detector.predict(source=vehicle_crop, conf=0.35, verbose=False)
-        best_box, best_conf = None, 0.0
-        for result in results:
+        # ── Stage 1: Koushi → candidate plate regions ────────────────────────
+        s1_results = self._plate_detector.predict(
+            source=vehicle_lower, conf=self._STAGE1_CONF, verbose=False
+        )
+        candidates: List[Tuple[float, np.ndarray]] = []  # (final_conf, crop)
+
+        for result in s1_results:
             for box in result.boxes:
-                conf = float(box.conf[0])
-                if conf > best_conf:
-                    best_conf = conf
-                    best_box = box.xyxy[0].tolist()
+                s1_conf = float(box.conf[0])
+                px1, py1c, px2, py2c = map(int, box.xyxy[0])
 
-        if best_box is None:
+                # Absolute coords in original image
+                abs_x1 = max(0, x1 + px1)
+                abs_y1 = max(0, crop_y1 + py1c)
+                abs_x2 = x1 + px2
+                abs_y2 = crop_y1 + py2c
+
+                pad = 4
+                plate_crop = image[
+                    max(0, abs_y1 - pad): abs_y2 + pad,
+                    max(0, abs_x1 - pad): abs_x2 + pad,
+                ]
+                if plate_crop.size == 0:
+                    continue
+
+                # ── Stage 2: YasirFaiz on Stage-1 crop → confirm ─────────────
+                final_conf = s1_conf
+                refined_crop = plate_crop
+                if self._stage2_detector is not None:
+                    s2_results = self._stage2_detector.predict(
+                        source=plate_crop, conf=self._STAGE2_CONF, verbose=False
+                    )
+                    for s2r in s2_results:
+                        for s2box in s2r.boxes:
+                            s2_conf = float(s2box.conf[0])
+                            final_conf = max(s1_conf, s2_conf)
+                            # Tighten crop using Stage-2 bbox
+                            sx1, sy1, sx2, sy2 = map(int, s2box.xyxy[0])
+                            h_c, w_c = plate_crop.shape[:2]
+                            inner = plate_crop[
+                                max(0, sy1): min(h_c, sy2),
+                                max(0, sx1): min(w_c, sx2),
+                            ]
+                            if inner.size > 0:
+                                refined_crop = inner
+
+                # Confidence gate — drop headlights, windshields, etc.
+                if final_conf >= self._MIN_PLATE_CONF:
+                    candidates.append((final_conf, refined_crop))
+                    logger.debug("Plate candidate: conf=%.2f size=%s", final_conf, refined_crop.shape)
+
+        if not candidates:
             return None
 
-        px1, py1, px2, py2 = map(int, best_box)
-        crop = vehicle_crop[py1:py2, px1:px2]
-        return crop if crop.size > 0 else None
+        # Return the highest-confidence crop, enhanced for OCR
+        candidates.sort(key=lambda t: t[0], reverse=True)
+        best_crop = candidates[0][1]
+        return self._enhance_for_ocr(best_crop)
 
     # ------------------------------------------------------------------
     # Internal: text extraction per engine
