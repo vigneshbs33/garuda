@@ -172,7 +172,18 @@ GARUDA consists of a Python FastAPI backend (which also runs the ML pipeline) an
 
 ## 🏃 Running the Application
 
-### 1. Start the FastAPI Backend
+### Quick Start (Windows)
+Double-click the `run_all.bat` file in the root directory, or execute it from the terminal:
+```bash
+run_all.bat
+```
+*This launches both the FastAPI backend and Next.js frontend in separate, titled console windows.*
+
+---
+
+### Manual Start
+
+#### 1. Start the FastAPI Backend
 With your virtual environment active, start the ASGI server:
 ```bash
 uvicorn backend.main:app --reload --port 8000
@@ -181,12 +192,12 @@ uvicorn backend.main:app --reload --port 8000
 *   **Interactive Swagger Documentation**: `http://localhost:8000/docs`
 *   **Database**: Auto-initializes a local SQLite database file `garuda.db` inside the root directory upon startup.
 
-### 2. Start the Frontend Dashboard
+#### 2. Start the Frontend Dashboard
 In a separate terminal window, start the Next.js development server:
 ```bash
 npm run dev
 ```
-*   **Dashboard URL**: `http://localhost:3000`
+*   **Dashboard URL**: `http://localhost:3000` (or `http://localhost:3001` if port 3000 is occupied)
 *   **Real-time updates**: Automatically connects to the backend WebSocket server (`ws://localhost:8000/ws/feed`) to stream live violations and system telemetry.
 
 ---

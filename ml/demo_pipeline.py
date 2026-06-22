@@ -26,6 +26,7 @@ import sys
 import time
 import json
 import logging
+import uuid
 from pathlib import Path
 
 import cv2
