@@ -192,5 +192,36 @@ def main():
     out.release()
     print(f"\n[SUCCESS] Rendered video saved to: {output_video}", flush=True)
 
+    # Post-process: convert the raw OpenCV output (mp4v codec) to web/WhatsApp compatible H.264 format
+    try:
+        import subprocess
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        temp_output = output_video.replace(".mp4", "_temp_h264.mp4")
+        print("\nConverting video to universally compatible H.264 format (for WhatsApp/Web)...")
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-i", output_video,
+            "-vcodec", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "high",
+            "-level", "4.0",
+            "-an",  # No audio stream
+            temp_output
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode == 0:
+            import os
+            os.replace(temp_output, output_video)
+            print(f"[SUCCESS] Web-optimized H.264 video saved to: {output_video}", flush=True)
+        else:
+            print(f"[WARNING] FFmpeg conversion failed: {result.stderr.decode()}", flush=True)
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+    except Exception as e:
+        print(f"[WARNING] Could not convert video to H.264: {e}", flush=True)
+
 if __name__ == '__main__':
     main()
+
