@@ -77,14 +77,20 @@ def main():
         for vehicle in vehicles:
             track_id = vehicle.track_id
             
+            vx1, vy1, vx2, vy2 = map(int, vehicle.bbox)
+            vehicle_width = vx2 - vx1
+            bbox_area = vehicle_width * (vy2 - vy1)
+            
+            # GATING 1: Scale gate. If the vehicle is too far away (width < 110px),
+            # the plate is physically unreadable, so skip to avoid false-positive bumper/grill crops.
+            if vehicle_width < 110:
+                continue
+            
             # Check tracking cache first to see if we've already done plate detection and OCR on this vehicle
             cached = None
             if track_id is not None and track_id in cached_plates:
                 cached = cached_plates[track_id]
                 
-            vx1, vy1, vx2, vy2 = map(int, vehicle.bbox)
-            bbox_area = (vx2 - vx1) * (vy2 - vy1)
-            
             # Decide if we need to run OCR:
             # We only run plate detection and OCR if:
             # 1. We have no cached data for this vehicle track yet.
@@ -100,6 +106,7 @@ def main():
             if not need_ocr and cached is not None:
                 plate_crop = cached["plate_crop"]
                 formatted_text = cached["text"]
+                confidence = cached["confidence"]
             else:
                 # Crop vehicle area
                 crop = frame[max(0, vy1):min(height, vy2), max(0, vx1):min(width, vx2)]
@@ -139,9 +146,23 @@ def main():
                 if (plate_crop is None or formatted_text == "") and cached is not None:
                     plate_crop = plate_crop if plate_crop is not None else cached["plate_crop"]
                     formatted_text = formatted_text if formatted_text != "" else cached["text"]
+                    confidence = cached["confidence"]
 
+            # GATING 2: Confidence and text-length overlay filter.
+            # Only draw the crop zoom-in card if we have a valid plate format OR a highly probable OCR read
+            # (length >= 4 and confidence >= 0.25). This cleans up all bumper/grill false-positives.
+            is_valid_plate = False
+            if formatted_text != "":
+                _, is_valid_plate = ocr._parse_plate(formatted_text)
+                
+            should_overlay = False
             if plate_crop is not None and plate_crop.size > 0:
-                vx1, vy1, vx2, vy2 = map(int, vehicle.bbox)
+                if is_valid_plate:
+                    should_overlay = True
+                elif len(formatted_text.replace("-", "")) >= 4 and confidence >= 0.25:
+                    should_overlay = True
+
+            if should_overlay:
                 # Draw white bordered plate crop overlay just above the vehicle
                 annotated = visualizer.draw_plate_crop(annotated, plate_crop, (vx1, vy1 - 65))
                 
