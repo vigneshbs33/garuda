@@ -38,6 +38,114 @@ GARUDA is an **edge-native, automated traffic violation detection system** desig
 
 ---
 
+## 🎥 Live Demo Evidence — Real Indian Traffic, Real Results
+
+> **All footage below is uncut, unedited output from the GARUDA pipeline running on real Indian traffic footage.**
+> Bounding boxes, labels, confidence scores, plate OCR, tier routing, and stationary timers are all drawn by the system — zero post-processing.
+
+---
+
+### Demo 1 — Helmet Non-Compliance + Triple Riding + Seatbelt (Multi-Violation Scene)
+
+The pipeline simultaneously flags **helmet non-compliance**, **triple riding**, and runs **seatbelt checks** across all cars in the same frame. Every vehicle gets a detection pass — compliant ones get green boxes, violations get red.
+
+````carousel
+![GARUDA Demo 1 — Annotated Evidence Stream (violations only)](BACKEND_REFERENCE_VIDEO/result/demo1_helmet_triple_seatbelt_annotated.mp4)
+
+<!-- slide -->
+
+![GARUDA Demo 1 — Full QA Stream (all tracked detections + stationary timers)](BACKEND_REFERENCE_VIDEO/result/demo1_helmet_triple_seatbelt_demo.mp4)
+````
+
+| Stream | What you're seeing |
+|--------|--------------------|
+| **Annotated** (`_annotated.mp4`) | Evidence-only view — violations surfaced with violation type, confidence %, plate OCR, and tier routing decision |
+| **Demo/QA** (`_demo.mp4`) | Every tracked vehicle + person; green = compliant, red = violation; "Stationary: Xs" counter on stopped vehicles |
+
+---
+
+### Demo 2 — Wrong-Way Driving + Illegal Parking (Tracker-Based, Video-Only Checks)
+
+Wrong-way and illegal parking are **tracker-dependent** — they only fire on video with ByteTrack IDs. The pipeline tracks heading angle (>100° off legal direction for 2+ consecutive frames) and stationary duration (30s frame-counter threshold, not wall-clock time).
+
+````carousel
+![GARUDA Demo 2 — Annotated Evidence Stream (wrong-way + stationary)](BACKEND_REFERENCE_VIDEO/result/demo2_wrongway_stationary_annotated.mp4)
+
+<!-- slide -->
+
+![GARUDA Demo 2 — Full QA Stream (all tracks + live stationary timer)](BACKEND_REFERENCE_VIDEO/result/demo2_wrongway_stationary_demo.mp4)
+````
+
+---
+
+### Demo 3 — Full Pipeline Output (Annotated Result Videos)
+
+End-to-end render of the batch job path (`POST /jobs/upload` → background task → two MP4 outputs written). The same `_render_frame_full()` function runs for both WebSocket render and REST job upload — one shared pipeline, two output streams.
+
+````carousel
+![GARUDA Full Pipeline — Annotated Result (Set 1)](BACKEND_REFERENCE_VIDEO/result/annotated_result_annotated.mp4)
+
+<!-- slide -->
+
+![GARUDA Full Pipeline — QA Demo Stream (Set 1)](BACKEND_REFERENCE_VIDEO/result/annotated_result_demo.mp4)
+
+<!-- slide -->
+
+![GARUDA Full Pipeline — Annotated Result (Set 2)](BACKEND_REFERENCE_VIDEO/result/annotated_result_2_annotated.mp4)
+
+<!-- slide -->
+
+![GARUDA Full Pipeline — QA Demo Stream (Set 2)](BACKEND_REFERENCE_VIDEO/result/annotated_result_2_demo.mp4)
+````
+
+---
+
+### Static Frame Evidence — Input vs. Output Side-by-Side
+
+Real Indian traffic still-frame results. Each pair shows the **raw camera input** alongside the **GARUDA-annotated output** with bounding boxes, labels, confidence scores, and violation IDs baked in.
+
+````carousel
+**Scene 1 — Triple Riding Detected (MG Road Intersection, Bangalore)**
+*Raw Input → GARUDA Output: three riders on one scooter flagged at 95% confidence. Plate unclear (occluded), violation ID `VIO-BLR-20260621-203910-FCE56C` generated.*
+
+![Raw Input — MG Road Intersection](test/pipeline_results/WhatsAppImage2026-06-20at12.24.39PM.jpeg/raw/VIO-BLR-20260621-203910-FCE56C_raw.jpg)
+
+<!-- slide -->
+
+![GARUDA Annotated Output — TRIPLE RIDING 95%](test/pipeline_results/WhatsAppImage2026-06-20at12.24.39PM.jpeg/annotated/VIO-BLR-20260621-203910-FCE56C.jpg)
+
+<!-- slide -->
+
+**Scene 2 — Helmet Non-Compliance Detected (Bangalore Traffic, Rear Angle)**
+*Raw Input → GARUDA Output: motorcycle rider without helmet flagged. Partial plate `G50226` read at 35% OCR confidence — low angle, motion blur, partial plate coverage. Tier-2 human review routed.*
+
+![Raw Input — Helmet Non-Compliance](test/pipeline_results/WhatsAppImage2026-06-20at12.24.46PM.jpeg/raw/VIO-BLR-20260621-203923-1C6448_raw.jpg)
+
+<!-- slide -->
+
+![GARUDA Annotated Output — HELMET NON COMPLIANCE, Tier-2](test/pipeline_results/WhatsAppImage2026-06-20at12.24.46PM.jpeg/annotated/VIO-BLR-20260621-203923-1C6448.jpg)
+
+<!-- slide -->
+
+**Scene 3 — Dense Traffic Multi-Detection: Seatbelt + Wrong-Way + Stop-Line (20+ vehicles)**
+*Single frame, 20+ tracked vehicles. Seatbelt OK (green) across all visible car windshields. Multiple wrong-way candidates flagged for human review (orange "???"). Stop-line zone visible. This is the exact frame type the pipeline processes in real-time via the patrol WebSocket.*
+
+![GARUDA Multi-Detection Output — Seatbelt + Wrong-Way + Stop-Line, Dense Indian Traffic](test/pipeline_results/seatbelt_check/demo_result.jpg)
+````
+
+---
+
+### Model Performance at a Glance
+
+| Dataset | Images | Helmet mAP@0.5 | No-Helmet mAP@0.5 | Overall mAP@0.5 |
+|---------|--------|----------------|-------------------|-----------------|
+| **Indian Traffic** (training domain) | 12,632 | — | — | **0.842** ✅ |
+| **Foreign Dataset** (zero-shot OOD) | 764 | 0.7227 | 0.3627 | **0.5427** |
+
+> **Why the gap?** Indian traffic has distinct helmet shapes (full-face + half-face mixes), head coverings (dupattas, scarves), and camera angles (overhead CCTV) not represented in foreign datasets. The model was trained and validated specifically on Indian road conditions — zero-shot transfer to foreign data is expected to degrade. The 0.842 on Indian traffic is what matters for deployment.
+
+---
+
 ## 📋 Problem Statement Walkthrough & Code Traceability
 
 Below is the traceability matrix mapping requirements from the Flipkart Gridlock problem statement (`ps.txt`) directly to their corresponding implementations in the codebase:
