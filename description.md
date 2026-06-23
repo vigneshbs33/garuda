@@ -4,140 +4,158 @@
 
 ---
 
-## 📌 1. Executive Summary & Problem Statement
-
-Urban environments in developing countries, specifically metropolitan hubs like Bangalore, face massive traffic congestion and high traffic violation rates. Traditional traffic surveillance systems fail due to several key problems:
-
-1. **High Cloud Costs & Network Failures:** Continuous 24/7 streaming of high-resolution video feeds to central servers requires immense bandwidth and incurs high cloud hosting costs. Network latency also slows down immediate patrol dispatch.
-2. **Obscured and Damaged License Plates:** Mud, physical plate damage, high vehicle speeds (motion blur), and tailgating make standard Automatic Number Plate Recognition (ANPR) OCR engines fail, allowing traffic offenders to escape.
-3. **Missed Multimodal Violations:** Existing setups check for speed or red-light running but miss dangerous behaviors like driver drowsiness, phone use, triple-riding, wrong-side driving, and helmet compliance.
-4. **False Challan Disputes:** Hardcoded rule engines trigger false tickets (due to visual occlusion), leading to citizens disputing citations and overwhelming virtual traffic courts.
-5. **Data Privacy Restrictions:** Centralizing personal citizen transit data conflicts with modern privacy regulations, such as India's Digital Personal Data Protection (DPDP) Act.
-
-**GARUDA** ("Gridlock Guardian") addresses these challenges with a decentralized, edge-first, confidence-gated AI enforcement network. By shifting the computer vision workload directly to low-cost edge nodes (such as the Raspberry Pi 5 + Google Coral TPU), GARUDA minimizes bandwidth usage, secures citizen privacy, and dynamically reconstructs illegible license plates using database query heuristics.
+## 📑 Table of Contents
+1. [Project Overview & Problem Statement](#-1-project-overview--problem-statement)
+2. [Code Traceability Matrix](#-2-code-traceability-matrix)
+3. [System Architecture & Ingestion Flow](#-3-system-architecture--ingestion-flow)
+4. [ML Model Inventory](#-4-ml-model-inventory)
+5. [Heuristic Optimizations (Indian Traffic Tuned)](#-5-heuristic-optimizations-indian-traffic-tuned)
+6. [Dubai-Style Automated Fast Challan & Dispute System](#-6-dubai-style-automated-fast-challan--dispute-system)
+7. [Next.js Dashboard & Local Gemma-3 AI Copilot](#-7-nextjs-dashboard--local-gemma-3-ai-copilot)
+8. [Future Scope & Roadmap (Under Development)](#-8-future-scope--roadmap-under-development)
+9. [Key Environment Variables (.env)](#-9-key-environment-variables-env)
 
 ---
 
-## 💡 2. Core Architecture & How It Works
+## 📌 1. Project Overview & Problem Statement
 
-GARUDA operates as a distributed system. Detections and classifications are processed locally at the intersection, and metadata is synced asynchronously to a central database and visualized on a Next.js command dashboard.
+Modern traffic monitoring setups suffer from significant structural bottlenecks that GARUDA systematically solves:
+* **High Cloud Cost & Privacy Overhead:** Streaming raw CCTV footage to cloud instances is expensive and exposes citizen transit data. GARUDA resolves this by executing all ML workloads locally on low-cost edge nodes.
+* **OCR Vulnerability (Dirty/Damaged Plates):** Dirt, damage, and high-speed motion blur prevent standard OCR engines from reading license plates. GARUDA reconstructs plates by combining visible alphanumeric sub-segments with vehicle class and color, then query-matching this tuple against database registries.
+* **Gated Human Enforcement:** Auto-billing every computer vision detection introduces false positives. GARUDA gates enforcement with a 3-tier routing engine: automatic ticketing for high-confidence events and a manual officer review queue for borderline cases.
+* **Proactive Accident Mitigation:** Standard traffic cameras only register violations post-event. GARUDA implements real-time driver state analysis (measuring drowsiness and phone use) to warn drivers before incidents occur.
+
+---
+
+## 📋 2. Code Traceability Matrix
+
+The table below maps the structural requirements from the Flipkart Gridlock problem statement (`ps.txt`) directly to their corresponding implementations in the codebase:
+
+| ps.txt Requirement | Status | Feature & Implementation Details | Codebase Reference |
+| :--- | :---: | :--- | :--- |
+| **Image Preprocessing** | ✅ | Adjusts contrast (CLAHE), applies bilateral filtering for denoising (rain, shadow, blur), and applies gamma/exposure correction. | [preprocessor.py](file:///Users/keshav/garuda/GARUDA/ml/pipeline/preprocessor.py) |
+| **Vehicle & User Detection** | ✅ | Runs fine-tuned YOLOv8m models to localize vehicles (cars, bikes, trucks, buses) and road users (pedestrians, riders). | [detector.py](file:///Users/keshav/garuda/GARUDA/ml/pipeline/detector.py) |
+| **Helmet Non-compliance** | ✅ | Identifies bare heads vs. helmets using full-frame detector `helmet_best.pt` with fallback to binary head-crop CNN. | [violation_classifier.py#L797](file:///Users/keshav/garuda/GARUDA/ml/pipeline/violation_classifier.py#L797) |
+| **Seatbelt Non-compliance** | ✅ | Windshield-ROI detection using YOLOv11s classifier model (`seatbelt_classifier.pt`). | [violation_classifier.py#L933](file:///Users/keshav/garuda/GARUDA/ml/pipeline/violation_classifier.py#L933) |
+| **Triple Riding** | ✅ | Measures spatial clustering overlaps between riders (person boxes) and two-wheeler bboxes. | [violation_classifier.py#L1017](file:///Users/keshav/garuda/GARUDA/ml/pipeline/violation_classifier.py#L1017) |
+| **Wrong-side Driving** | ✅ | Multi-frame velocity vector direction checking against calibrated zones with heading thresholds. | [violation_classifier.py#L1047](file:///Users/keshav/garuda/GARUDA/ml/pipeline/violation_classifier.py#L1047) |
+| **Stop-line Violation** | ✅ | Crosses vehicle bboxes against stop-line coordinates while gating for active red-signal state. | [violation_classifier.py#L1110](file:///Users/keshav/garuda/GARUDA/ml/pipeline/violation_classifier.py#L1110) |
+| **Red-light Violation** | ✅ | Debounced transition check confirming a vehicle crossed from a legal zone to illegal zone during a red light. | [violation_classifier.py#L1143](file:///Users/keshav/garuda/GARUDA/ml/pipeline/violation_classifier.py#L1143) |
+| **Illegal Parking** | ✅ | Monitors track IDs remaining stationary inside calibrated parking zones for more than 30s (anchored to video FPS). | [violation_classifier.py#L1176](file:///Users/keshav/garuda/GARUDA/ml/pipeline/violation_classifier.py#L1176) |
+| **Confidence Scoring** | ✅ | Assigns confidence values and routes via `ConfidenceRouter` (Auto-Challan vs. Review Queue vs. Log/Discard). | [confidence_router.py](file:///Users/keshav/garuda/GARUDA/ml/pipeline/confidence_router.py) |
+| **License Plate Recognition** | ✅ | Stage-1 plate detection (`plate_koushi.pt`) + Stage-2 refinement (`plate_yasir.pt`) + fast-plate-ocr fallback chain. | [ocr.py](file:///Users/keshav/garuda/GARUDA/ml/pipeline/ocr.py) |
+| **Evidence Generation** | ✅ | Packages annotated visual layouts (highlighting violation region and zoomed-in plate) with full JSON metadata. | [evidence.py](file:///Users/keshav/garuda/GARUDA/ml/utils/evidence.py) & [visualizer.py](file:///Users/keshav/garuda/GARUDA/ml/utils/visualizer.py) |
+| **Analytics & Reporting** | ✅ | Centralized SQLite/PostgreSQL database stores logs, camera configs, audit logs, and repeat offenders. Exposes endpoints for stats. | [analytics.py](file:///Users/keshav/garuda/GARUDA/backend/api/analytics.py) |
+| **Performance Evaluation** | ✅ | Local scripts validate model files against external datasets and generate precision/recall reports. | [eval_helmet_best.py](file:///Users/keshav/garuda/GARUDA/scratch/eval_helmet_best.py) |
+
+---
+
+## 🏗️ 3. System Architecture & Ingestion Flow
+
+The local edge pipeline runs inference on frames, creates evidence crops, watermarks timestamps, and uploads JSON metadata payloads via secure HTTPS to the backend.
 
 ```
-                    +------------------------------------+
-                    |     Intersection CCTV Camera       |
-                    +-----------------+------------------+
-                                      | (Local RTSP stream)
-                                      v
-                    +------------------------------------+
-                    |  Edge-Node (Raspberry Pi 5 + Coral) |
-                    |  - Deblur, CLAHE Preprocessing     |
-                    |  - YOLOv8 Detector & ByteTrack     |
-                    |  - Custom Helmet & Seatbelt CNNs   |
-                    |  - Koushi/YasirFaiz Plate OCR      |
-                    +-----------------+------------------+
-                                      |
-                     (JSON Ingestion Payload over HTTPS)
-                                      v
-                    +------------------------------------+
-                    |   FastAPI HTTPS / WebSocket API    |
-                    |  - Syncs to SQLite / PostgreSQL    |
-                    |  - Broadcasts live events to WebUI |
-                    +--------+------------------+--------+
-                             |                  |
-                             v                  v
-             +-----------------------+  +-----------------------+
-             |   Next.js 16 WebUI    |  |  Gemma-3 AI Copilot   |
-             | - Real-time Feed      |  | - Ollama (gemma3:1b)  |
-             | - Review Queue        |  | - Safe SQL execution  |
-             | - Stop-Line Setup     |  | - Text-to-DB queries  |
-             +-----------------------+  +-----------------------+
+Image / Video / Camera Feed
+    ↓
+[Preprocessor]       ml/pipeline/preprocessor.py  (CLAHE, noise reduction, motion deblur)
+    ↓
+[Detector]           ml/pipeline/detector.py      (YOLOv8m vehicle/person/phone detector)
+    ↓
+[Tracker]            ml/pipeline/tracker.py       (ByteTrack multi-object tracking)
+    ↓
+[Violation Checks]   ml/pipeline/violation_classifier.py (Helmet, Signal, seatbelt, wrong-way)
+    ↓
+[Driver State]       ml/pipeline/driver_state.py  (MediaPipe FaceMesh drowsiness check)
+    ↓
+[OCR Chain]          ml/pipeline/ocr.py           (Koushi + YasirFaiz + OCR engines)
+    ↓
+[Confidence Router]  ml/pipeline/confidence_router.py (Routing Tiers 1/2/3)
+    ↓
+[Evidence Packager]  ml/utils/evidence.py         (Watermarked JPEGs + metadata JSON)
+    ↓
+[FastAPI Backend]    backend/main.py              (Uvicorn server, HTTP routes, WebSockets)
+    ↓
+[Dashboard WebUI]    src/app/                     (Real-time reactive Next.js dashboard)
 ```
 
----
-
-## 🛠️ 3. Fully Implemented & Operational Features
-
-The following modules have been successfully built, tested, and validated in our local deployment:
-
-### A. Dynamic Next.js 16 Web Dashboard
-* **Tech Stack:** Next.js 16 App Router, TypeScript, React 19, Leaflet.js maps.
-* **Review Queue:** Allows operators to review **Tier 2 (Human Review)** violations. Detections can be confirmed (generating e-Challans) or rejected (archived as model feedback) with one click.
-* **Camera Calibration:** Provides an interactive interface to register camera coordinates and calibrate the stop-line `y` coordinate visually.
-* **Geospatial Heatmaps:** Renders live, interactive heatmaps showing violation density across city intersections.
-
-### B. High-Concurrency FastAPI Backend
-* **Tech Stack:** FastAPI (async), SQLAlchemy 2.0 async ORM, Uvicorn, SQLite (dev) / PostgreSQL (prod).
-* **Ingestion API:** Secured via HTTPS (SSL self-signed certificate support configured). Handles high-throughput POST streams from edge cameras.
-* **Live WebSocket Feed:** Native WebSocket router (`ws://feed`) broadcasts violation alerts instantly to the dashboard.
-* **Ollama Gemma-3 AI Copilot:** A conversational AI assistant powered by a local **`gemma3:1b`** LLM. It allows officers to write natural language queries (e.g., *"Show me the last 5 pending triple-riding violations on camera BLR-CAM-001"*), which the copilot safely translates to database queries and returns as formatted UI data.
-
-### C. Multi-Stage ML Pipeline
-1. **Preprocessing (`ml/pipeline/preprocessor.py`):** Low-light CLAHE enhancement, denoising, adaptive gamma correction (for night/rain), and motion deblurring (unsharp masking).
-2. **Object Detection (`ml/pipeline/detector.py`):** Utilizes YOLOv8m to detect traffic participants (person, bicycle, car, motorcycle, bus, truck). Operates in **< 6.7 seconds on a standard CPU**, managing **35+ vehicles and 23+ persons** per frame.
-3. **Multi-Object Tracking (`ml/pipeline/tracker.py`):** Integrates ByteTrack to assign persistent track IDs to vehicles across frames.
-4. **9 Violation Classifiers (`ml/pipeline/violation_classifier.py`):**
-   * *Helmet Compliance:* upper 35% crop analyzed by a custom Helmet CNN (MobileNetV3).
-   * *Traffic Light Signal:* YOLOv8x detects traffic signals in the upper 40% of the frame, falling back to HSV color blob analysis.
-   * *Wrong-Side Driving:* Tracker calculates velocity vectors. Violations are flagged if the dot product against lane direction is `< -0.7`.
-   * *Stop-Line crossing:* Triggered when vehicle bounding box bottom exceeds calibrated `stop_line_y` while the traffic signal is red.
-   * *Triple Riding:* Counts the number of person bounding boxes whose centers intersect a motorcycle's bounding box.
-   * *Seatbelt Compliance:* Scans driver region using Hough line detection for diagonal lines; conservative routing forces this to human review.
-   * *Distracted Phone Use:* YOLOv8 class 67 (cell phone) crop re-ranked by custom CNN.
-   * *Drowsy Driving (`driver_state.py`):* MediaPipe FaceMesh tracks 468 facial landmarks. Measures Eye Aspect Ratio (EAR) and Mouth Aspect Ratio (MAR) to trigger warning alerts if EAR `< 0.25` for over 1.5 seconds.
-5. **License Plate OCR (`ml/pipeline/ocr.py`):**
-   * **Stage 1 (Koushi):** `plate_koushi.pt` (YOLO) locates the license plate boundary inside the vehicle crop.
-   * **Stage 2 (YasirFaiz):** `plate_yasir.pt` confirms the cropped plate box.
-   * **OCR Engine Chain:** Feeds the cropped plate to PaddleOCR / Tesseract to extract alphanumeric strings.
-
-### D. Model Performance Benchmarks
-We evaluated our primary helmet detection model using our automated validation harness (`scratch/eval_helmet_best.py`):
-* **Indian Traffic Dataset (12,632 images):** Achieved **`mAP@0.5 ≈ 0.842`**, demonstrating high recall in dense urban traffic conditions.
-* **General Foreign Dataset (764 images):** Achieved `mAP@0.5 = 0.5427` (Helmet F1: `0.603`, No-Helmet F1: `0.346`), validating the model's specialized tuning for Indian road layouts and rider styles.
+There are two primary entry points that run this pipeline:
+1. **`backend/api/jobs.py`** — Executes the shared `MLRegistry` singleton (loaded via `backend/services/ml_registry.py`) in the background. It is triggered by dashboard video uploads via `POST /api/v1/jobs/upload`.
+2. **`ml/demo_pipeline.py`** — A standalone CLI script for local testing and debugging, capable of processing webcams, video clips, and static images, then pushing them to the backend via `--backend-url`.
 
 ---
 
-## ⚡ 4. Unique Selling Propositions (USPs)
+## 🗃️ 4. ML Model Inventory
 
-1. **Edge-First Autonomy (Raspberry Pi & Jetson Support):** The system operates completely offline-first. Detections are cached locally in SQLite and synced on reconnect, allowing the platform to run in network dead zones.
-2. **Heuristic Plate Reconstruction:** When plates are damaged, muddy, or blurry, the pipeline matches partial OCR characters with visual descriptors (vehicle type and HSV color analysis) to query the database and resolve the vehicle's identity.
-3. **Proactive Drowsiness Prevention:** MediaPipe FaceMesh monitors driver blink rates (EAR) and yawning (MAR) to warn fatigued drivers *before* accidents occur.
-4. **Privacy-First Federated Learning:** Edge nodes collaborate to improve the global model using the Flower framework. Nodes share only weight deltas weekly, keeping raw citizen surveillance video local.
-5. **Confidence-Gated Review Queue:** Minimizes false challans by routing only high-confidence (`≥ 90%`) tickets to automatic billing. Borderline detections are routed to the Next.js manual review dashboard.
+GARUDA hosts 7 highly optimized model checkpoints:
+
+### A. Primary Detection weights (`ml/models/weights/detection/`)
+* **`yolov8m.pt` (52MB):** Performs the primary detection task. Bounding boxes are filtered for vehicles (cars, motorcycles, buses, trucks) and road participants (persons, cell phones).
+
+### B. Violation Classification weights (`ml/models/weights/violations/`)
+* **`helmet_best.pt` (6.5MB):** A custom 9-class YOLOv8n classifier trained specifically on Indian traffic. Detects riders wearing helmets, bare heads, and full silhouettes.
+  * *Benchmark (Indian Traffic - 12,632 images):* **`mAP@0.5 ≈ 0.842`** 🏆
+  * *Benchmark (Foreign OOD Dataset - 764 images):* **`mAP@0.5 ≈ 0.543`** (Lower due to lack of traditional Indian head coverings, overhead angles, and helmet shapes).
+* **`helmet_cnn.pt` (1.1MB):** A fallback binary head-crop classifier utilizing a MobileNetV3-Small backbone.
+  * *Metrics:* **Accuracy: 87.44%**, **F1-Score: 84.21%** (n=215).
+* **`seatbelt_classifier.pt` (1.1MB):** Windshield-ROI seatbelt classifier (YOLOv11s-cls).
+* **`traffic_lights_yolov8x.pt` (49.6MB):** Decodes signals across 8 distinct states (`RedCircular`, `GreenCircular`, etc.) inside the upper 40% of camera frames.
+
+### C. License Plate OCR weights (`ml/models/weights/ocr/`)
+* **`plate_koushi.pt` (6.2MB):** Stage-1 plate locator (YOLOv8n). Isolates license plate coordinates from vehicle crops.
+  * *Metrics:* **mAP@0.5: 88.16%**, **mAP@0.5:0.95: 51.02%**.
+* **`plate_yasir.pt` (6.2MB):** Stage-2 crop validator. Confirms coordinates to eliminate bumper stickers, vehicle brand emblems, and road signs.
+* **`plate_yolov8_moin.pt` (52MB):** High-recall legacy plate localization fallback.
+* **OCR Character Engine Chain:** If characters are found, the text is extracted using a priority chain: `fast-plate-ocr` ➔ `PaddleOCR` ➔ `EasyOCR` ➔ `Tesseract`.
 
 ---
 
-## 🚦 5. Official SMS Formats & Fine Schedule
-Automated challans are pushed using standard notification formats.
+## 📐 5. Heuristic Optimizations (Indian Traffic Tuned)
 
-### Standard SMS Template
-```text
-Challan No: [CHALLAN_NUMBER] for Vehicle No: [VEHICLE_NUMBER] has been issued for traffic violation of [VIOLATION_DESCRIPTION] on [DATETIME].
+To deploy successfully in chaotic Indian traffic conditions, GARUDA utilizes custom heuristics:
 
-Total Challan Amount: Rs. [AMOUNT]/-
-For details, photo/video proof, and online payment visit official portal: https://echallan.parivahan.gov.in
-
-If you wish to contest this violation, you may present your evidence at your local traffic police station or court to seek a cancellation.
-
-- Digital Traffic Police, Govt. of India
-```
-*Official Sender IDs: `TM-ECHALN`, `VK-ECHALN`, `DL-ECHALN`, `MH-ECHALN`*
-
-### Fine Schedule (Motor Vehicles Act)
-| Violation Category | SMS Text Description (`[VIOLATION_DESCRIPTION]`) | Fine Amount | Additional Action |
-| :--- | :--- | :--- | :--- |
-| **Helmet Compliance** | `Driving without protective headgear / helmet` | **₹1,000** | 3-Month DL Suspension |
-| **Triple Riding** | `Triple riding on two-wheeler / Carrying more than one pillion rider` | **₹1,000** | None |
-| **Seatbelt Compliance**| `Driving without safety seat belt / Failing to wear seat belt` | **₹1,000** | None |
-| **Stop-Line crossing** | `Stop-line violation / Crossing the stop line at red signal` | **₹500 - ₹1,000**| Evaluated on obstruction |
-| **Red-Light Jumping** | `Jumping red light / Signal violation` | **₹1,000 - ₹5,000**| License suspension / jail |
-| **Wrong-Side Driving** | `Driving against the established flow of traffic / Wrong side` | **₹1,000 - ₹5,000**| Dangerous driving charges |
-| **Illegal Parking** | `Parking in a designated 'No Parking' zone / Obstructive parking` | **₹500 / ₹1,500** | Towing charges applicable |
+1. **Context-Aware Stop Lines:** Requires tracking evidence showing a vehicle moving from a legal zone across the line, preventing false alarms for pre-parked vehicles at intersection boundaries.
+2. **Wrong-Side Zone Exemptions for Buses:** Buses merging out of designated bus bays point backward relative to through-traffic for several frames. The algorithm dynamically exempts buses (`WRONG_SIDE_EXEMPT_CLASSES`) to eliminate these false positives.
+3. **Dynamic Parking Timers:** Idle parking durations are anchored to the frame rate (FPS) of the video feed rather than CPU speed, preventing processing hiccups from triggering false citations.
+4. **Vector-Based Wrong-Side Checks:** Utilizes heading angles (100°+) and multi-frame tracking history to ignore standard, legitimate lane changes.
+5. **HSV Color Blob Signal Fallback:** If the YOLO signal classifier is physically obstructed by tree branches or banners, the system uses HSV pixel analysis to monitor traffic signal changes.
 
 ---
 
 ## ⚖️ 6. Dubai-Style Automated Fast Challan & Citizen Dispute System
 
 GARUDA implements a fast, automated enforcement flow inspired by modern smart cities like Dubai, while maintaining a clear and accessible grievance redressal mechanism for citizens to appeal incorrect tickets.
+
+```
+Edge Camera Node logs violation ➔ Ingests to /api/v1/violations/ingest
+                                        |
+                 +----------------------+----------------------+
+                 | (Tier 1: Conf >= 90%)                       | (Tier 2: Conf < 90%)
+                 v                                             v
+        [auto_challan status]                          [pending status]
+                 |                                             |
+          (SMS Sent to User)                                   |
+                 |                                             |
+                 +----------------------+----------------------+
+                                        |
+                                        v
+                 [Citizen opens unique evidence URL in SMS]
+                                        |
+                                        v
+                          Is details/plate incorrect?
+                                        |
+                    +-------------------+-------------------+
+                    | Yes (Disputes)                        | No (Pays)
+                    v                                       v
+         [Queues to Dashboard]                     [Challan settled]
+                    |
+           (Officer Reviews)
+                    |
+      +-------------+-------------+
+      | Approved                  | Rejected
+      v                           v
+[POST /confirm]             [POST /reject]
+(Fine locked)               (Fine deleted & FL cache loaded)
+```
 
 ### A. The Fast Ingestion & Alert Flow
 1. **Edge Detection:** The camera edge node detects a traffic violation and reads the license plate characters.
@@ -155,11 +173,19 @@ To protect citizens from false accusations (such as occlusions, emergency maneuv
 
 ---
 
-## 🔮 7. Future Scope & Roadmap (Under Development)
+## 🖥️ 7. Next.js Dashboard & Local Gemma-3 AI Copilot
 
-The following roadmap items represent features currently under active development or scheduled for production scaling:
+* **Next.js 16 Web Dashboard (`src/app/`):** A modern, responsive dashboard written in TypeScript. Features:
+  * **Real-time Map:** Leverages Leaflet.js to draw active hot-spots and track patrol routes.
+  * **Interactive Review Queue:** Displays pending Tier 2 reviews with side-by-side cropped annotated and raw frames.
+  * **Camera Setup:** Allows admins to calibrate coordinates dynamically.
+* **Gemma-3 AI Copilot (`backend/core/agent_executor.py`):** Integrates local LLM execution. It exposes a chat interface on the dashboard where officers can submit natural language prompts (e.g., *"Find all wrong-side violations on camera CAM-3 from yesterday"*). The copilot uses a local **`gemma3:1b`** instance via Ollama, maps the schema metadata, safely compiles the matching SQLAlchemy statement, executes the query, and displays structured lists and summaries.
 
-1. **Physical Edge Device Porting:** quantizing PyTorch weights to INT8 and compiling TFLite benchmarks to run on a physical **Raspberry Pi 5 + Google Coral TPU** USB accelerator.
+---
+
+## 🔮 8. Future Scope & Roadmap (Under Development)
+
+1. **Physical Edge Device Porting:** Porting and compiling INT8 quantized TFLite weights to run directly on physical **Raspberry Pi 5 + Google Coral TPU** hardware.
 2. **National Database Integration:** Replacing the local mock vehicle registry with live REST integrations connecting to the **Vahan National Register API** to fetch owner contact details.
 3. **Live Twilio Gateway Integration:** Moving the notification system from mock mode (printing to log console) to a live Twilio account for SMS and WhatsApp deliveries.
 4. **Active Federated Learning Retraining Loop:** Completing the local training logic (`_local_train` method) in the Flower client so edge nodes can execute backpropagation using confirmed officer corrections.
@@ -167,12 +193,12 @@ The following roadmap items represent features currently under active developmen
 
 ---
 
-## ⚙️ 8. Key Environment Variables (`.env`)
+## ⚙️ 9. Key Environment Variables (`.env`)
 
 | Variable Name | Default / Example Value | Purpose |
 | :--- | :--- | :--- |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./garuda.db` | Async database dialect driver. Switch to `postgresql+asyncpg://...` for production. |
-| `DEVICE` | `cpu` | Target inference hardware (`cpu`, `cuda:0` for GPU). |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./garuda.db` | Async database connection string. Switch to `postgresql+asyncpg://...` for production. |
+| `DEVICE` | `cpu` | Target inference hardware (`cpu` or `cuda:0` for GPU). |
 | `ALERTS_ENABLED` | `false` | Enables Twilio messaging notifications. |
 | `TWILIO_ACCOUNT_SID` | `ACxxxxxxxxxxxx` | Twilio account identifier. |
 | `TWILIO_AUTH_TOKEN` | `xxxxxxxxxxxx` | Twilio authorization credentials. |
