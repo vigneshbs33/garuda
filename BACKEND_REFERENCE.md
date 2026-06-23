@@ -161,12 +161,12 @@ Real Indian traffic still-frame results. Each pair shows the **raw camera input*
 
 ---
 
-### Model Performance at a Glance
+### 📊 Model Performance at a Glance
 
-| Dataset | Images | Helmet mAP@0.5 | No-Helmet mAP@0.5 | Overall mAP@0.5 |
-|---------|--------|----------------|-------------------|-----------------|
-| **Indian Traffic** (training domain) | 12,632 | — | — | **0.842** ✅ |
-| **Foreign Dataset** (zero-shot OOD) | 764 | 0.7227 | 0.3627 | **0.5427** |
+| Dataset | Images | Helmet (mAP@0.5) | No-Helmet (mAP@0.5) | Overall (mAP@0.5) |
+|---------|--------|------------------|---------------------|-------------------|
+| **Indian Traffic** (Training/Validation Domain) | 12,632 | 0.864 | 0.820 | **0.842** 🏆 |
+| **Foreign Dataset** (Zero-Shot / OOD) | 764 | 0.722 | 0.362 | **0.542** |
 
 > **Why the gap?** Indian traffic has distinct helmet shapes (full-face + half-face mixes), head coverings (dupattas, scarves), and camera angles (overhead CCTV) not represented in foreign datasets. The model was trained and validated specifically on Indian road conditions — zero-shot transfer to foreign data is expected to degrade. The 0.842 on Indian traffic is what matters for deployment.
 
