@@ -1,26 +1,32 @@
+<div align="center">
+  
 # 🚦 GARUDA: Gridlock Guardian
-### Autonomous Edge-Native Traffic Intelligence & Enforcement Platform
+**Comprehensive Project Description & Problem-Solution Matrix**  
+*Flipkart Gridlock 3.0 | Team CodeKrafters*
+
+</div>
 
 ---
 
-## 📌 1. Problem Statement
-*   **High Bandwidth & Cloud Costs:** 24/7 cloud streaming of raw video is costly and faces network dropouts.
-*   **Illegible License Plates:** Blurry, muddy, or damaged plates render standard OCR systems useless.
-*   **Missed Complex Violations:** Standard cameras miss behaviors like driver fatigue, phone use, triple-riding, or wrong-side driving.
-*   **Dispute Backlog & Privacy Concerns:** Automated ticket triggers lead to false citations, citizen complaints, and compliance risks under India's DPDP Act.
+## 📌 1. The Core Problem Statement
+*   **💸 High Bandwidth & Cloud Costs:** 24/7 cloud streaming of raw video is costly and faces network dropouts in developing infrastructure.
+*   **🌫️ Illegible License Plates:** Blurry, muddy, or physically damaged plates render standard OCR systems completely useless.
+*   **🚨 Missed Complex Violations:** Standard cameras miss nuanced behaviors like driver fatigue, phone use, triple-riding, or wrong-side driving.
+*   **⚖️ Dispute Backlog & Privacy Concerns:** Automated ticket triggers lead to false citations, citizen complaints, and severe compliance risks under India's DPDP Act.
 
 ---
 
-## 💡 2. The Solution
-GARUDA shifts computation to low-power edge nodes (e.g., **Raspberry Pi 5 + Google Coral TPU** or **NVIDIA Jetson Orin NX**), executing all detection, classification, and OCR locally. Detections are uploaded via tiny JSON payloads (~2KB) to a central FastAPI database and live Next.js dashboard.
-*   **Alphanumeric Plate Reconstruction:** The pipeline repairs obscured plates by combining partial character strings with detected vehicle color (HSV analysis) and type (YOLOv8), query-matching this tuple against local/Vahan databases.
-*   **Automated SMS Challans:** Instantly pulls offender contacts from registries and sends SMS/WhatsApp tickets containing fine details and proof links.
+## 💡 2. The GARUDA Solution
+GARUDA completely shifts computation to low-power edge nodes (e.g., **Raspberry Pi 5 + Google Coral TPU** or **NVIDIA Jetson Orin NX**), executing all detection, classification, and OCR locally. Detections are uploaded via tiny JSON payloads (~2KB) to a central FastAPI database and live Next.js dashboard.
+
+*   **🧩 Alphanumeric Plate Reconstruction:** The pipeline repairs obscured plates by combining partial character strings with detected vehicle color (HSV analysis) and type (YOLOv8), query-matching this tuple against local/Vahan databases.
+*   **📲 Automated SMS Challans:** Instantly pulls offender contacts from registries and sends SMS/WhatsApp tickets containing fine details and proof links.
 
 ---
 
-## 📊 3. Feature Comparison
+## 📊 3. Feature Comparison Matrix
 
-| Feature / Metric | Traditional Systems (CCTV) | GARUDA Platform |
+| Feature / Metric | Traditional Systems (CCTV) | 🦅 GARUDA Platform |
 | :--- | :--- | :--- |
 | **Execution Location** | Centralized Cloud (Raw stream) | **Edge-Native** (Local Pi/Jetson) |
 | **Network Reliance** | Constant high-speed internet needed | **Offline-First** (SQLite local cache) |
@@ -32,19 +38,19 @@ GARUDA shifts computation to low-power edge nodes (e.g., **Raspberry Pi 5 + Goog
 
 ## 🌟 4. Unique Selling Propositions (USPs)
 
-1.  **Edge-First Autonomy (Raspberry Pi & Jetson Support):** Runs locally on INT8 TFLite/TensorRT models. Stores data locally during network outages and syncs when online.
-2.  **Robust Plate Reconstruction Heuristics:** Matches partial letters, vehicle color, and class to resolve vehicle identities where standard OCR fails.
-3.  **Proactive Drowsiness Detection:** Eye Aspect Ratio (EAR) and Mouth Aspect Ratio (MAR) checks via MediaPipe FaceMesh alert distracted or fatigued drivers.
-4.  **Local Gemma-3 AI Copilot:** A conversational dashboard assistant powered by a local **`gemma3:1b`** LLM via Ollama to query database violations safely using natural language.
-5.  **Confidence-Gated Human-in-the-Loop Routing:** Auto-bills Tier 1 (high confidence `≥90%`) violations. Routes Tier 2 (borderline `60-89%`) events to an officer review panel to prevent false tickets.
+1.  **⚡ Edge-First Autonomy:** Runs locally on INT8 TFLite/TensorRT models. Stores data locally during network outages and syncs when online.
+2.  **🕵️ Robust Plate Reconstruction Heuristics:** Matches partial letters, vehicle color, and class to resolve vehicle identities where standard OCR fails.
+3.  **😴 Proactive Drowsiness Detection:** Eye Aspect Ratio (EAR) and Mouth Aspect Ratio (MAR) checks via MediaPipe FaceMesh alert distracted or fatigued drivers.
+4.  **🤖 Local Gemma-3 AI Copilot:** A conversational dashboard assistant powered by a local **`gemma3:1b`** LLM via Ollama to query database violations safely using natural language.
+5.  **🚦 Confidence-Gated Human-in-the-Loop Routing:** Auto-bills Tier 1 (high confidence `≥90%`) violations. Routes Tier 2 (borderline `60-89%`) events to an officer review panel to prevent false tickets.
 
 ---
 
 ## 📐 5. Heuristic Optimizations (Indian Traffic Tuned)
-*   **Context-Aware Stop Lines:** Requires vehicle movement vector verification, preventing false triggers for pre-parked cars.
-*   **Wrong-Side Bus Bay Exemptions:** Exempts buses (`WRONG_SIDE_EXEMPT_CLASSES`) to prevent false wrong-way alerts during merges.
-*   **Dynamic Parking Timers:** Anchors idle parking duration checks directly to video FPS.
-*   **Advanced Signal Confidence Floors:** Debounces signal states using multi-frame verification.
+*   **📍 Context-Aware Stop Lines:** Requires vehicle movement vector verification, preventing false triggers for pre-parked cars.
+*   **🚌 Wrong-Side Bus Bay Exemptions:** Exempts buses (`WRONG_SIDE_EXEMPT_CLASSES`) to prevent false wrong-way alerts during merges.
+*   **⏱️ Dynamic Parking Timers:** Anchors idle parking duration checks directly to video FPS to handle variable streaming rates.
+*   **🚦 Advanced Signal Confidence Floors:** Debounces signal states using multi-frame verification.
 
 ---
 
@@ -52,7 +58,7 @@ GARUDA shifts computation to low-power edge nodes (e.g., **Raspberry Pi 5 + Goog
 
 GARUDA implements a fast, automated enforcement flow inspired by modern smart cities like Dubai, while maintaining a clear and accessible grievance redressal mechanism for citizens to appeal incorrect tickets.
 
-```
+```text
 Edge Camera Node logs violation ➔ Ingests to /api/v1/violations/ingest
                                         |
                  +----------------------+----------------------+
@@ -99,12 +105,6 @@ Edge Camera Node logs violation ➔ Ingests to /api/v1/violations/ingest
 
 ---
 
-## ⚙️ 8. Key Environment Variables (`.env`)
-*   `DATABASE_URL`: Database connection path (SQLite local or PostgreSQL prod `postgresql+asyncpg://...`).
-*   `DEVICE`: CPU or CUDA GPU execution.
-*   `ALERTS_ENABLED`: Toggles Twilio alerts.
-*   `FL_ENABLED`: Toggles Flower Federated Learning client.
-
----
-
-*Team CodeKrafters | Flipkart Gridlock 3.0*
+<div align="center">
+  <b>Forged through sleepless nights, endless model training, crazy errors, and sheer willpower by Team CodeKrafters for Flipkart Gridlock 3.0</b>
+</div>

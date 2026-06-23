@@ -1,5 +1,10 @@
+<div align="center">
+  
 # 📊 GARUDA: Pitch Deck & Presentation Guide
-### Gridlock Guardian: Edge-Native Autonomous Traffic Enforcement
+**Gridlock Guardian: Edge-Native Autonomous Traffic Enforcement**  
+*Flipkart Gridlock 3.0 | Team CodeKrafters*
+
+</div>
 
 This presentation outline details the **exact current implementation status** and establishes the **future roadmap** based on what is currently under active development.
 
@@ -124,3 +129,9 @@ This presentation outline details the **exact current implementation status** an
     *   **Legal Compliance:** Completely aligned with India's DPDP Act, keeping visual footage local.
 *   **Speaker Notes:**
     > "To conclude, the impact of GARUDA is clear. It creates safer streets by automatically enforcing helmets, seatbelts, and stop-lines while proactively checking for drowsy drivers. It saves administrative time, protects citizen privacy by processing data locally, and maintains a transparent, auditable trail. GARUDA is the future of smart, localized public safety. Thank you, and we are open to your questions."
+
+---
+
+<div align="center">
+  <b>Forged through sleepless nights, endless model training, crazy errors, and sheer willpower by Team CodeKrafters for Flipkart Gridlock 3.0</b>
+</div>
