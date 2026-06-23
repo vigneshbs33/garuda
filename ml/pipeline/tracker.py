@@ -46,9 +46,27 @@ class TrackState:
     first_seen_time: float = field(default_factory=time.time)
     history: deque = field(default_factory=lambda: deque(maxlen=60))  # ~2s at 30fps
     is_active: bool = True
+    # frame_idx at which this vehicle most recently became stationary, or
+    # None if it's currently moving. Reset to None the moment it moves again
+    # — this is what lets a renderer show a live "how long has this vehicle
+    # been stationary" counter without re-deriving it from scratch every
+    # frame, and is independent of any no-parking-zone calibration (unlike
+    # ViolationClassifier._parked_since, which only tracks zone+stationary).
+    stationary_since_frame: Optional[int] = None
 
     def add_frame(self, entry: FrameEntry) -> None:
         self.history.append(entry)
+        if self.is_stationary():
+            if self.stationary_since_frame is None:
+                self.stationary_since_frame = entry.frame_idx
+        else:
+            self.stationary_since_frame = None
+
+    def stationary_duration_frames(self) -> int:
+        """Frames elapsed since this vehicle became stationary, or 0 if moving."""
+        if self.stationary_since_frame is None or not self.history:
+            return 0
+        return self.history[-1].frame_idx - self.stationary_since_frame
 
     @property
     def latest(self) -> Optional[FrameEntry]:

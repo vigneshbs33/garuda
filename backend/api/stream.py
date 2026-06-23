@@ -601,6 +601,30 @@ def _render_frame_full(
             if plate_info and ml.visualizer is not None:
                 annotated = ml.visualizer.draw_plate_crop(annotated, plate_info["plate_crop"], (x1, y1 - 70))
 
+        # Live "how long has this been stationary" counter — independent of
+        # any no-parking-zone calibration (TrackState.stationary_since_frame
+        # resets the moment the vehicle moves again), so it shows on any
+        # stopped vehicle, not just ones inside a configured zone. Builds
+        # toward the same 30s illegal-parking threshold check_illegal_parking()
+        # uses, but is purely a visual aid here — it doesn't gate anything.
+        if det.track_id is not None and det.is_vehicle:
+            state = tracker_states.get(det.track_id)
+            if state is not None:
+                stat_frames = state.stationary_duration_frames()
+                if stat_frames > 0:
+                    stat_sec = stat_frames / max(ml.classifier.fps, 1e-6)
+                    # Draw on QA/Demo stream
+                    _draw_id_label(
+                        demo, f"Stationary: {stat_sec:.0f}s",
+                        x1, min(y2 + 22, demo.shape[0] - 4), (60, 200, 255),
+                    )
+                    # Draw on Clean/Annotated stream if it has violations
+                    if vtype_names:
+                        _draw_id_label(
+                            annotated, f"Stationary: {stat_sec:.0f}s",
+                            x1, min(y2 + 22, annotated.shape[0] - 4), (60, 200, 255),
+                        )
+
         # Dedup: only the violation types not already cited for this track_id.
         if det.track_id is not None and vlist:
             already = reported[det.track_id]

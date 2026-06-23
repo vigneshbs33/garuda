@@ -1178,18 +1178,24 @@ class ViolationClassifier:
         track_id: int,
         is_stationary: bool,
         in_no_parking_zone: bool,
-        parking_threshold_sec: float = 300.0,
+        parking_threshold_sec: float = 30.0,
     ) -> Optional[ViolationResult]:
         """
-        Detect vehicle parked in a no-parking zone for > 5 minutes of
+        Detect vehicle parked in a no-parking zone for > 30 seconds of
         *video* time.
 
         Duration is measured in frames elapsed (self._frame_counter) scaled
         by self.fps, not wall-clock time — check_all() is called once per
         processed frame regardless of how fast the host machine actually
-        runs that loop (batch inference can blow through a 5-minute video in
+        runs that loop (batch inference can blow through a long video in
         a few seconds, or lag behind on a slow machine), so a wall-clock
         timer would measure processing speed instead of video time.
+
+        30s is a deliberately short, aggressive threshold (down from a
+        previous 5-minute default) — short enough that a brief, noisy
+        stationary spell (traffic queue, momentary stop) can plausibly cross
+        it, so this is routed to Tier-2 human review (confidence 0.75, below
+        the 0.90 auto-challan floor) rather than auto-confirmed.
         """
         if not in_no_parking_zone or not is_stationary:
             if track_id in self._parked_since:
@@ -1204,7 +1210,7 @@ class ViolationClassifier:
         if duration >= parking_threshold_sec:
             return ViolationResult.create(
                 ViolationType.ILLEGAL_PARKING,
-                confidence=0.92,
+                confidence=0.75,
                 bbox=vehicle.bbox,
                 metadata={"parked_duration_sec": int(duration)},
             )
