@@ -6,14 +6,35 @@ echo           GARUDA - Gridlock Guardian
 echo ==========================================================
 echo.
 
-:: Check for .venv directory
-if exist .venv\Scripts\activate.bat (
-    echo [INFO] Virtual environment venv found. Activating...
-    set PYTHON_CMD=.venv\Scripts\python.exe
+:: 1. Python Environment Setup
+if not exist .venv\Scripts\activate.bat (
+    echo [INFO] Virtual environment not found. Creating one now...
+    python -m venv .venv
+    if errorlevel 1 (
+        echo [ERROR] Failed to create virtual environment. Make sure Python is installed.
+        pause
+        exit /b 1
+    )
+    echo [INFO] Installing Python dependencies...
+    .venv\Scripts\python.exe -m pip install --upgrade pip
+    .venv\Scripts\python.exe -m pip install -r requirements.txt
 ) else (
-    echo [WARNING] Local virtual environment venv not found.
-    echo [INFO] Falling back to global system python...
-    set PYTHON_CMD=python
+    echo [INFO] Virtual environment found.
+)
+set PYTHON_CMD=.venv\Scripts\python.exe
+
+echo.
+:: 2. Node Modules Setup
+if not exist node_modules\ (
+    echo [INFO] Node modules not found. Installing frontend dependencies...
+    call npm install
+    if errorlevel 1 (
+        echo [ERROR] Failed to install npm dependencies. Make sure Node.js is installed.
+        pause
+        exit /b 1
+    )
+) else (
+    echo [INFO] Node modules found.
 )
 
 echo.
