@@ -303,20 +303,52 @@ JWT-based, implemented in `backend/api/auth.py`. Email verification is mandatory
 | GET | `/cameras` | List all registered cameras |
 | POST | `/cameras` | Register a new camera |
 | GET | `/cameras/{id}` | Get single camera info |
-| PUT | `/cameras/{id}/config` | Update stop line, description |
+| PUT | `/cameras/{id}/config` | Update calibration (zones, direction, stop line) + RTSP config |
 | DELETE | `/cameras/{id}` | Remove camera |
 
 ```json
-// Register Camera — Body
+// POST /cameras — Register Camera — Body (backend/models/schemas.py: CameraCreate)
 {
   "id":          "BLR-CAM-MG-ROAD-001",
   "location":    "MG Road & Brigade Road Intersection",
   "lat":         12.9753,
   "lon":         77.6069,
   "stop_line_y": 380,
-  "description": "4-lane junction, 30 km/h zone"
+  "description": "4-lane junction, 30 km/h zone",
+  "rtsp_url":    "",
+  "resolution":  ""
 }
 ```
+
+```json
+// PUT /cameras/{id}/config — Update Calibration — Body (CameraConfigUpdate, all fields optional)
+{
+  "stop_line_y":        420,
+  "parking_zones":      [[80, 120, 350, 260], [900, 50, 1100, 200]],
+  "traffic_direction":  "down",
+  "wrong_side_zone":     [[1000, 300, 1900, 1300]],
+  "description":        "Recalibrated after camera remount",
+  "rtsp_url":           "rtsp://192.168.1.50/stream1",
+  "resolution":         "1920x1080"
+}
+```
+
+#### Calibration fields — what your frontend actually needs to send
+
+**Coordinate system, the one thing to get right**: every `[x1,y1,x2,y2]` zone and `stop_line_y` are **raw pixel coordinates in the native resolution of that camera's source feed** — not normalized 0-1, not a fixed canvas size. `ImagePreprocessor.preprocess()` never resizes the frame (it downscales internally for enhancement, then upscales back to the original size before detection runs), so whatever resolution the uploaded video/RTSP stream actually is, that's the coordinate space the calibration UI must draw in. If your calibration tool lets someone draw a box on a *displayed* (possibly scaled-down) preview image, you must scale those coordinates back up to the source resolution before sending them — don't send canvas/display pixel coordinates as-is unless the preview is shown at 1:1.
+
+| Field | Type | Default | Read by | What it does |
+|-------|------|---------|---------|---------------|
+| `stop_line_y` | `int` | `380` | `check_red_light()`, `check_stop_line()` (+ static fallbacks) | The y-pixel row of the stop line. A vehicle's bbox bottom edge (`bbox[3]`) past this row, while the light is red (running) or red/yellow (stopped on it), is what both checks test against. |
+| `parking_zones` | `List[[x1,y1,x2,y2]]` | `[]` | `check_illegal_parking()`, `is_in_no_parking_zone()` | One or more no-parking rectangles. A vehicle's bbox *center* falling inside any of them, while stationary for ≥30s, fires `ILLEGAL_PARKING` (confidence 0.75, Tier-2 review). Empty list = check never fires for this camera. |
+| `traffic_direction` | `"down"\|"up"\|"left"\|"right"` | `"down"` | `check_wrong_side()` | The legal direction of travel as this camera sees it, in image coordinates (`"down"` = vehicles should move toward increasing y / toward the bottom of frame). This is what a vehicle's heading is compared against. |
+| `wrong_side_zone` | `List[[x1,y1,x2,y2]]` | `[]` | `check_wrong_side()`, `_check_wrong_side_static()` | One or more rectangles marking lanes reserved for traffic moving in `traffic_direction` only (e.g. the oncoming lane, or a one-way service lane). A vehicle inside one of these, heading more than 100° off `traffic_direction` for 2+ consecutive frames, fires `WRONG_SIDE_DRIVING`. Buses are exempt (legitimate bus-bay merges look like a sharp reversal but aren't a violation). Empty list = check never fires. |
+
+**Fields that exist in code but are NOT wired to this API yet** — don't build calibration UI for these, they won't do anything via `/cameras`:
+- `wrong_side_lane` (`"left"|"right"`) — a `ViolationClassifier` constructor default, only consumed by the image-only `_check_wrong_side_static()` fallback. No `CameraModel` column, no schema field, no way to set it per-camera today.
+- `signal_bbox` (`[x1,y1,x2,y2]`, a calibrated ROI for where the traffic light itself is) — exists as a parameter throughout `MLSignalStateDetector`/`check_all()`, but no backend caller (`jobs.py`, `stream.py`) ever passes one. The signal detector always falls back to scanning the top 40% of the frame for every camera, calibrated or not.
+
+**Practical calibration flow for a frontend**: show the operator a representative frame from that camera (e.g. a recent evidence image or a paused live frame) at its native resolution, let them drag a horizontal line for `stop_line_y` and rectangles for `parking_zones`/`wrong_side_zone`, pick `traffic_direction` from a 4-way compass selector, then `PUT` all of it to `/cameras/{id}/config` in one call — partial updates are fine, omitted fields are left unchanged.
 
 ---
 
@@ -450,7 +482,9 @@ Send `"ping"` (string) to keep connection alive.
 
 There is a second WebSocket, `ws://localhost:8000/ws/patrol`, for mobile patrol units: it accepts base64-encoded frames, runs them through the ML pipeline in real time, and returns annotated results + saves evidence on detection.
 
-There is a third WebSocket, `ws://localhost:8000/ws/video-render`, that renders a full annotated + demo MP4 from an uploaded video using the exact same per-frame pipeline as the batch job path (`_render_frame_full()` in `backend/api/stream.py`). It computes plate OCR for every freshly-confirmed violation, but until 2026-06-23 only ever used that result for the DB record — the rendered video itself never drew the plate text on screen. Fixed: it now draws `PLATE: <text> (<conf>%)` under the vehicle's box via `FrameVisualizer.draw_plate_result()` whenever OCR actually returns non-empty text. Note this doesn't guarantee text appears often — plate OCR's hit rate on small/distant/motion-blurred plates (e.g. a two-wheeler's rear plate from an overhead traffic-cam angle) is genuinely low; an empty `formatted_text` is the OCR engine failing to read the plate, not the drawing code being broken.
+There is a third WebSocket, `ws://localhost:8000/ws/video-render`, that renders a full annotated + demo MP4 from an uploaded video using the exact same per-frame pipeline as the batch job path (`_render_frame_full()` in `backend/api/stream.py`). It now writes two separate output files — `{id}_annotated.mp4` (violations only — the evidence view) and `{id}_demo.mp4` (every tracked detection, QA view) — with per-track plate-OCR caching (re-runs OCR only once a vehicle's bbox has grown ≥15% closer, otherwise reuses the best prior read) instead of running OCR fresh every frame. It computes plate OCR for every freshly-confirmed violation, but until 2026-06-23 only ever used that result for the DB record — the rendered video itself never drew the plate text on screen. Fixed: it now draws `PLATE: <text> (<conf>%)` under the vehicle's box via `FrameVisualizer.draw_plate_result()` whenever OCR actually returns non-empty text. Note this doesn't guarantee text appears often — plate OCR's hit rate on small/distant/motion-blurred plates (e.g. a two-wheeler's rear plate from an overhead traffic-cam angle) is genuinely low; an empty `formatted_text` is the OCR engine failing to read the plate, not the drawing code being broken.
+
+Also added 2026-06-23: a live "Stationary: Xs" counter drawn under any tracked vehicle that's currently stationary, via `TrackState.stationary_since_frame`/`stationary_duration_frames()` in `ml/pipeline/tracker.py` — set the moment velocity drops below the stationary threshold, cleared the instant it moves again. It's independent of any no-parking-zone calibration (shows on any stopped vehicle, not just ones inside a configured zone) and is purely visual — it doesn't gate `check_illegal_parking()`, which keeps its own separate, zone-gated timer. Unconditional on the demo stream; only shown alongside an actual violation on the annotated stream, to keep that one evidence-only. **Inherits the same ByteTrack ID-instability limitation noted elsewhere**: if a track ID gets reassigned to a different physical vehicle mid-clip, the counter resets even though the original vehicle never moved — confirmed on real footage where a genuinely-parked car's counter climbed correctly for ~11s, then reset because ByteTrack handed its ID to a passing vehicle.
 
 ---
 
@@ -646,10 +680,11 @@ The vanilla frontend (`frontend/`) is intentionally simple. To migrate to React/
 |----------|---------|--------------|
 | `DATABASE_URL` | `sqlite+aiosqlite:///./garuda.db` | Switch to Postgres for prod |
 | `DEVICE` | `cpu` | `cuda:0` for GPU |
-| `STOP_LINE_Y` | `380` | Pixel Y of stop line (calibrate!) |
-| `CONFIDENCE_TIER1` | `0.90` | Auto-challan threshold |
-| `CONFIDENCE_TIER2` | `0.60` | Human review threshold |
 | `ALERTS_ENABLED` | `false` | Set `true` + Twilio creds for real SMS |
+
+**Dead config — defined in `backend/core/config.py`'s `Settings` but never actually read anywhere in the pipeline; do not rely on these to calibrate anything:**
+- `STOP_LINE_Y` (default `380`) — the real per-camera stop line comes from `CameraModel.stop_line_y` in the DB, set via `PUT /cameras/{id}/config` (see Calibration fields above), not this env var.
+- `CONFIDENCE_TIER1` / `CONFIDENCE_TIER2` (defaults `0.90`/`0.60`) — the real tier thresholds are hardcoded module-level constants in `ml/pipeline/confidence_router.py` (`TIER1_AUTO_CHALLAN`, `TIER2_HUMAN_REVIEW`), not these env vars.
 | `FL_ENABLED` | `false` | Enable federated learning client |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL` | — | Required for `/auth/register` email verification to work at all |
 
