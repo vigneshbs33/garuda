@@ -75,14 +75,11 @@ It ingests both live RTSP camera feeds and batch video uploads, processing them 
 
 The pipeline simultaneously flags **helmet non-compliance**, **triple riding**, and runs **seatbelt checks** across all cars in the same frame. Every vehicle gets a detection pass — compliant ones get green boxes, violations get red.
 
-````carousel
-![GARUDA Demo 1 — Annotated Evidence Stream (violations only)](BACKEND_REFERENCE_VIDEO/result/demo1_helmet_triple_seatbelt_annotated.mp4)
+``![GARUDA Demo 1 — Annotated Evidence Stream (violations only)](BACKEND_REFERENCE_VIDEO/result/demo1_helmet_triple_seatbelt_annotated.mp4)
 
-<!-- slide -->
 
 ![GARUDA Demo 1 — Full QA Stream (all tracked detections + stationary timers)](BACKEND_REFERENCE_VIDEO/result/demo1_helmet_triple_seatbelt_demo.mp4)
-````
-
+``
 | Stream | What you're seeing |
 |--------|--------------------|
 | **Annotated** (`_annotated.mp4`) | Evidence-only view — violations surfaced with violation type, confidence %, plate OCR, and tier routing decision |
@@ -94,71 +91,57 @@ The pipeline simultaneously flags **helmet non-compliance**, **triple riding**, 
 
 Wrong-way and illegal parking are **tracker-dependent** — they only fire on video with ByteTrack IDs. The pipeline tracks heading angle (>100° off legal direction for 2+ consecutive frames) and stationary duration (30s frame-counter threshold, not wall-clock time).
 
-````carousel
-![GARUDA Demo 2 — Annotated Evidence Stream (wrong-way + stationary)](BACKEND_REFERENCE_VIDEO/result/demo2_wrongway_stationary_annotated.mp4)
+``![GARUDA Demo 2 — Annotated Evidence Stream (wrong-way + stationary)](BACKEND_REFERENCE_VIDEO/result/demo2_wrongway_stationary_annotated.mp4)
 
-<!-- slide -->
 
 ![GARUDA Demo 2 — Full QA Stream (all tracks + live stationary timer)](BACKEND_REFERENCE_VIDEO/result/demo2_wrongway_stationary_demo.mp4)
-````
-
+``
 ---
 
 ### Demo 3 — Full Pipeline Output (Annotated Result Videos)
 
 End-to-end render of the batch job path (`POST /jobs/upload` → background task → two MP4 outputs written). The same `_render_frame_full()` function runs for both WebSocket render and REST job upload — one shared pipeline, two output streams.
 
-````carousel
-![GARUDA Full Pipeline — Annotated Result (Set 1)](BACKEND_REFERENCE_VIDEO/result/annotated_result_annotated.mp4)
+``![GARUDA Full Pipeline — Annotated Result (Set 1)](BACKEND_REFERENCE_VIDEO/result/annotated_result_annotated.mp4)
 
-<!-- slide -->
 
 ![GARUDA Full Pipeline — QA Demo Stream (Set 1)](BACKEND_REFERENCE_VIDEO/result/annotated_result_demo.mp4)
 
-<!-- slide -->
 
 ![GARUDA Full Pipeline — Annotated Result (Set 2)](BACKEND_REFERENCE_VIDEO/result/annotated_result_2_annotated.mp4)
 
-<!-- slide -->
 
 ![GARUDA Full Pipeline — QA Demo Stream (Set 2)](BACKEND_REFERENCE_VIDEO/result/annotated_result_2_demo.mp4)
-````
-
+``
 ---
 
 ### Static Frame Evidence — Input vs. Output Side-by-Side
 
 Real Indian traffic still-frame results. Each pair shows the **raw camera input** alongside the **GARUDA-annotated output** with bounding boxes, labels, confidence scores, and violation IDs baked in.
 
-````carousel
-**Scene 1 — Triple Riding Detected (MG Road Intersection, Bangalore)**
+``**Scene 1 — Triple Riding Detected (MG Road Intersection, Bangalore)**
 *Raw Input → GARUDA Output: three riders on one scooter flagged at 95% confidence. Plate unclear (occluded), violation ID `VIO-BLR-20260621-203910-FCE56C` generated.*
 
 ![Raw Input — MG Road Intersection](test/pipeline_results/WhatsAppImage2026-06-20at12.24.39PM.jpeg/raw/VIO-BLR-20260621-203910-FCE56C_raw.jpg)
 
-<!-- slide -->
 
 ![GARUDA Annotated Output — TRIPLE RIDING 95%](test/pipeline_results/WhatsAppImage2026-06-20at12.24.39PM.jpeg/annotated/VIO-BLR-20260621-203910-FCE56C.jpg)
 
-<!-- slide -->
 
 **Scene 2 — Helmet Non-Compliance Detected (Bangalore Traffic, Rear Angle)**
 *Raw Input → GARUDA Output: motorcycle rider without helmet flagged. Partial plate `G50226` read at 35% OCR confidence — low angle, motion blur, partial plate coverage. Tier-2 human review routed.*
 
 ![Raw Input — Helmet Non-Compliance](test/pipeline_results/WhatsAppImage2026-06-20at12.24.46PM.jpeg/raw/VIO-BLR-20260621-203923-1C6448_raw.jpg)
 
-<!-- slide -->
 
 ![GARUDA Annotated Output — HELMET NON COMPLIANCE, Tier-2](test/pipeline_results/WhatsAppImage2026-06-20at12.24.46PM.jpeg/annotated/VIO-BLR-20260621-203923-1C6448.jpg)
 
-<!-- slide -->
 
 **Scene 3 — Dense Traffic Multi-Detection: Seatbelt + Wrong-Way + Stop-Line (20+ vehicles)**
 *Single frame, 20+ tracked vehicles. Seatbelt OK (green) across all visible car windshields. Multiple wrong-way candidates flagged for human review (orange "???"). Stop-line zone visible. This is the exact frame type the pipeline processes in real-time via the patrol WebSocket.*
 
 ![GARUDA Multi-Detection Output — Seatbelt + Wrong-Way + Stop-Line, Dense Indian Traffic](test/pipeline_results/seatbelt_check/demo_result.jpg)
-````
-
+``
 ---
 
 ### 📊 Model Performance at a Glance
@@ -237,8 +220,7 @@ curl -F "name=test" -F "source_type=Image" -F "file=@test/sample.jpg" \
 
 # 6b. Or via the standalone CLI pipeline:
 python ml/demo_pipeline.py --input sample.jpg --backend-url http://localhost:8000
-```
-
+`
 ---
 
 ## 🏗️ System Architecture
@@ -266,8 +248,7 @@ graph TD
     
     L --> M[FastAPI Backend + SQLite]
     M --> N[Frontend Dashboard]
-```
-
+`
 ### Flow Detail
 ```text
 Image / Video / Camera Feed
@@ -289,8 +270,7 @@ Image / Video / Camera Feed
 [Evidence Packager]  ml/utils/evidence.py
     ↓
 [FastAPI Backend]    backend/main.py
-```
-
+`
 Two entry points run this pipeline today:
 1. **`backend/api/jobs.py`** — uses `get_ml_registry()` from `backend/services/ml_registry.py` (shared singleton), used by `POST /jobs` and `POST /jobs/upload`. This is the path the dashboard's upload flow hits.
 2. **`ml/demo_pipeline.py`** — standalone CLI for local testing/debugging, optionally POSTs results to the backend via `--backend-url`.
@@ -301,8 +281,7 @@ The patrol WebSocket (`backend/api/stream.py → ws_patrol`) also shares the sam
 
 ## Backend Directory Structure (post-refactor)
 
-```
-backend/
+`backend/
 ├── main.py                       FastAPI app — CORS, lifespan, router registration
 ├── core/
 │   ├── config.py                 Settings (DATABASE_URL, SECRET_KEY, SMTP creds)
@@ -330,12 +309,10 @@ backend/
     ├── users.py                  User management
     ├── audit_logs.py             Audit trail
     └── agent.py                  AI ops-agent chat endpoint
-```
-
+`
 ## ML Directory Structure (post-refactor)
 
-```
-ml/
+`ml/
 ├── pipeline/                     Inference modules (unchanged)
 │   ├── preprocessor.py           CLAHE + denoise + gamma
 │   ├── detector.py               YOLOv8m vehicle/person/phone detector
@@ -367,8 +344,7 @@ ml/
 └── utils/
     ├── evidence.py               Evidence packaging helper
     └── visualizer.py             Frame annotation renderer
-```
-
+`
 ---
 
 ## ML Model Inventory
@@ -405,10 +381,8 @@ OCR **text recognition** (separate from plate *detection*) tries engines in orde
 
 ## API Base URL
 
-```
-http://localhost:8000/api/v1
-```
-
+`http://localhost:8000/api/v1
+`
 Interactive docs: `http://localhost:8000/docs`
 
 ---
@@ -484,8 +458,7 @@ JWT-based, implemented in `backend/api/auth.py`. Email verification is mandatory
   "rtsp_url":    "",
   "resolution":  ""
 }
-```
-
+`
 ```json
 // PUT /cameras/{id}/config — Update Calibration — Body (CameraConfigUpdate, all fields optional)
 {
@@ -497,8 +470,7 @@ JWT-based, implemented in `backend/api/auth.py`. Email verification is mandatory
   "rtsp_url":           "rtsp://192.168.1.50/stream1",
   "resolution":         "1920x1080"
 }
-```
-
+`
 #### Calibration fields — what your frontend actually needs to send
 
 **Coordinate system, the one thing to get right**: every `[x1,y1,x2,y2]` zone and `stop_line_y` are **raw pixel coordinates in the native resolution of that camera's source feed** — not normalized 0-1, not a fixed canvas size. `ImagePreprocessor.preprocess()` never resizes the frame (it downscales internally for enhancement, then upscales back to the original size before detection runs), so whatever resolution the uploaded video/RTSP stream actually is, that's the coordinate space the calibration UI must draw in. If your calibration tool lets someone draw a box on a *displayed* (possibly scaled-down) preview image, you must scale those coordinates back up to the source resolution before sending them — don't send canvas/display pixel coordinates as-is unless the preview is shown at 1:1.
@@ -614,16 +586,13 @@ This is the closest thing to ps.txt's "Analytics and Reporting" requirement — 
   "camera_id": "BLR-CAM-DEMO-001",
   "location": "MG Road"
 }
-```
-
+`
 ---
 
 ## WebSocket — Live Feed
 
-```
-ws://localhost:8000/ws/feed
-```
-
+`ws://localhost:8000/ws/feed
+`
 ```javascript
 const ws = new WebSocket('ws://localhost:8000/ws/feed');
 ws.onmessage = (evt) => {
@@ -634,8 +603,7 @@ ws.onmessage = (evt) => {
     // data.timestamp, data.severity, data.annotated_image_url
   }
 };
-```
-
+`
 ### Event Types
 | Event | When | Fields |
 |-------|------|--------|
@@ -666,11 +634,9 @@ A live "Stationary: Xs" counter displays under tracked stationary vehicles.
 
 ## Static Files — Evidence Images
 
-```
-GET /evidence/annotated/{violation_id}.jpg
+`GET /evidence/annotated/{violation_id}.jpg
 GET /evidence/raw/{violation_id}_raw.jpg
-```
-
+`
 Mounted via `StaticFiles` in `backend/main.py`. A second static mount, `/test-images`, serves the `test/` directory (sample images for demo/gallery use).
 
 ---
@@ -701,8 +667,7 @@ All 9 types are defined in `ml/pipeline/violation_classifier.py:39-73`. The firs
 
 ## Confidence Router
 
-```
-TIER 1 (conf ≥ 0.90) → AUTO_CHALLAN
+`TIER 1 (conf ≥ 0.90) → AUTO_CHALLAN
   • Evidence saved, challan auto-generated
   • No human intervention needed
 
@@ -716,8 +681,7 @@ TIER 3 (conf < 0.60) → LOG_WITH_PLATE / DISCARD
   • Cross-reference repeat offender DB
 
 OVERRIDE → Repeat offender always escalates to TIER 2 (HIGH priority)
-```
-
+`
 ---
 
 ## Federated Learning
@@ -733,8 +697,7 @@ python -m ml.federated.server --port 8080 --rounds 3 --min-cameras 3
 
 # Local simulation (no hardware needed):
 python -c "from ml.federated.server import simulate_training; simulate_training(5, 3)"
-```
-
+`
 This is wired but does not yet retrain from real edge data — treat as a framework/demo, not a production loop.
 
 ---
@@ -757,8 +720,7 @@ from ml.pipeline.detector import VehicleDetector
 d = VehicleDetector()
 d.export_tensorrt(half=True)
 "
-```
-
+`
 ---
 
 ## Database Schema (`backend/core/database.py`)
@@ -813,8 +775,7 @@ audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, actor TEXT,
   action TEXT, target TEXT, details TEXT
 )
-```
-
+`
 ---
 
 ## Frontend Migration Guide
