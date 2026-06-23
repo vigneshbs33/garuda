@@ -13,8 +13,15 @@ yolov8m.pt
 datasets/
 data/raw/
 runs/
+
+# Evidence & Tests & Videos
 /evidence/
 test_assets/
+test/
+BACKEND_REFERENCE_VIDEO/
+*.mp4
+*.avi
+*.mov
 
 # Env
 .env
@@ -38,4 +45,3 @@ cert.pem
 
 # Scratch files
 scratch/
-
