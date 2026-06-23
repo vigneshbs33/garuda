@@ -315,6 +315,14 @@ async def save_violation(session: AsyncSession, record: Dict) -> ViolationModel:
     session.add(obj)
     await session.commit()
     await session.refresh(obj)
+    
+    if obj.status == "auto_challan":
+        try:
+            from ..services.sms_service import send_challan_sms
+            await send_challan_sms(obj, force=False)
+        except Exception as sms_err:
+            logger.error("Failed to automatically send SMS challan on save: %s", sms_err)
+            
     return obj
 
 
@@ -330,10 +338,18 @@ async def update_violation_status(
     )
     obj = result.scalar_one_or_none()
     if obj:
+        status_changed = obj.status != status
         obj.status     = status
         obj.officer_id = officer_id
         await session.commit()
         await session.refresh(obj)
+        
+        if status_changed and status == "confirmed":
+            try:
+                from ..services.sms_service import send_challan_sms
+                await send_challan_sms(obj, force=False)
+            except Exception as sms_err:
+                logger.error("Failed to send confirmed SMS challan: %s", sms_err)
     return obj
 
 

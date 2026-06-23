@@ -34,7 +34,7 @@ export const VIOLATION_SEVERITY_BY_TYPE: Record<string, "low" | "medium" | "high
 export const VIOLATION_FINE_INR: Record<string, number> = {
   "No Helmet": 1000,
   "Seatbelt": 1000,
-  "Triple Riding": 2000,
+  "Triple Riding": 1000,
   "Wrong Way": 5000,
   "Stop Line": 500,
   "Red Light": 1000,

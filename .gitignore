@@ -35,3 +35,7 @@ garuda.db
 *.pem
 key.pem
 cert.pem
+
+# Scratch files
+scratch/
+

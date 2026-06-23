@@ -48,7 +48,7 @@ export default function AgentModule() {
       id: initialId,
       title: "New Investigation Session",
       messages: [
-        { role: "assistant", content: "Session Initialized. I am **Gemma Security Copilot**, your direct coordinator for the platform. Query any vehicle, review citations, configure cameras, or navigate pages." }
+        { role: "assistant", content: "Session Initialized. I am the **Garuda Core Console**, your interface coordinator for the enforcement registry. Query any vehicle, review citations, configure cameras, or navigate pages." }
       ],
       createdAt: new Date().toISOString()
     };
@@ -171,9 +171,9 @@ export default function AgentModule() {
       }
     } catch (e) {
       appendErrorMessage(
-        "⚠️ **AI Pipeline Connection Error**\n\n" +
-        "Ollama service or local `gemma3:1b` model could not be reached. " +
-        "Verify Ollama is active on `http://localhost:11434` and that you have pre-loaded the model.",
+        "⚠️ **Registry Core Database Error**\n\n" +
+        "Garuda local database compiler interface could not be reached. " +
+        "Verify that your local backend container is active and initialized.",
         updatedMessages
       );
     } finally {
@@ -293,7 +293,7 @@ export default function AgentModule() {
           alignItems: "center"
         }}>
           <div>
-            <span style={{ fontWeight: "700", fontSize: "13px" }}>GEMMA COPILOT CONSOLE</span>
+            <span style={{ fontWeight: "700", fontSize: "13px" }}>COMMAND QUERY CONSOLE</span>
             <span style={{ 
               fontSize: "9px", 
               marginLeft: "8px", 
@@ -303,7 +303,7 @@ export default function AgentModule() {
               borderRadius: "3px",
               fontWeight: "bold"
             }}>
-              {isBackendConnected ? "OLLAMA COMPILER ACTIVE" : "RADAR SIMULATOR FALLBACK"}
+              {isBackendConnected ? "REGISTRY COMPILER ACTIVE" : "RADAR SIMULATOR FALLBACK"}
             </span>
           </div>
           <span className="mono" style={{ fontSize: "10px", color: "var(--text-muted)" }}>
@@ -353,7 +353,7 @@ export default function AgentModule() {
               color: "var(--text-muted)"
             }}>
               <span className="pulse-green" style={{ marginRight: "6px", width: "6px", height: "6px" }}></span>
-              Gemma is querying platform indexes...
+              System is querying platform indexes...
             </div>
           )}
         </div>
@@ -458,7 +458,7 @@ export default function AgentModule() {
           color: "#854d0e",
           lineHeight: "1.3"
         }}>
-          <b>GUARDRAILS:</b> Gemma Agent rejects data modification queries that compromise integrity. Toggling cameras and reviews updates standard indexes with full audit tracking.
+          <b>SYSTEM SAFEGUARDS:</b> The console interface prevents data alterations that compromise database integrity. All camera toggles and citation reviews update standard indexed schemas with full audit log tracking.
         </div>
       </div>
 

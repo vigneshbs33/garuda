@@ -55,12 +55,12 @@ TIER_2_THRESHOLD = 0.50   # >= this → HUMAN_REVIEW
 FINE_TABLE: Dict[str, int] = {
     "No Helmet":      1000,
     "Seatbelt":       1000,
-    "Triple Riding":  2000,
+    "Triple Riding":  1000,
     "Wrong Way":      5000,
     "Stop Line":      500,
     "Red Light":      1000,
     "Illegal Parking":500,
-    "Phone Use":      1500,
+    "Phone Use":      5000,
     "Drowsy":         2000,
 }
 

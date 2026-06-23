@@ -378,3 +378,32 @@ export function aggregateRecords(records: PipelineRecord[]): StageAggregate {
   agg.violationsByType = Array.from(typeMap.values());
   return agg;
 }
+
+export async function deleteViolation(violationId: string, token?: string | null): Promise<void> {
+  const res = await fetch(`${getApiBase()}/violations/${violationId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`Delete failed (${res.status})`);
+}
+
+export async function batchDeleteViolations(ids: string[], token?: string | null): Promise<void> {
+  const res = await fetch(`${getApiBase()}/violations/batch-delete`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(`Batch delete failed (${res.status})`);
+}
+
+export async function sendChallanSms(violationId: string, token?: string | null): Promise<void> {
+  const res = await fetch(`${getApiBase()}/violations/${violationId}/send-sms`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error(`Failed to send SMS challan (${res.status})`);
+}
+
