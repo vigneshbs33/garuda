@@ -51,9 +51,12 @@ export default function AuthModule() {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      minHeight: "80vh",
+      minHeight: "100vh",
       padding: "20px",
-      backgroundColor: "var(--bg-primary)"
+      backgroundImage: "linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)), url('/login.png')",
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat"
     }}>
       <div style={{
         width: "100%",
