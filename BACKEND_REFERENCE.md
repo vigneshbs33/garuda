@@ -115,33 +115,15 @@ End-to-end render of the batch job path (`POST /jobs/upload` → background task
 ``
 ---
 
-### Static Frame Evidence — Input vs. Output Side-by-Side
+### 🎬 Video Evidence — Input vs. Output Side-by-Side
 
-Real Indian traffic still-frame results. Each pair shows the **raw camera input** alongside the **GARUDA-annotated output** with bounding boxes, labels, confidence scores, and violation IDs baked in.
+Real Indian traffic video results. Each row shows the **raw camera input stream** alongside the **GARUDA-annotated output stream** (with bounding boxes, labels, confidence scores, and violation IDs baked in).
 
-``**Scene 1 — Triple Riding Detected (MG Road Intersection, Bangalore)**
-*Raw Input → GARUDA Output: three riders on one scooter flagged at 95% confidence. Plate unclear (occluded), violation ID `VIO-BLR-20260621-203910-FCE56C` generated.*
+| Raw Input Stream | GARUDA Annotated Output |
+| :---: | :---: |
+| **Scene 1 — Bangalore Traffic (Set 1)**<br><video src="BACKEND_REFERENCE_VIDEO/WhatsApp Video 2026-06-23 at 11.50.30.mp4" controls="controls" width="100%" title="Raw Input Set 1"></video> | **GARUDA Output (Set 1)**<br><video src="BACKEND_REFERENCE_VIDEO/result/annotated_result_annotated.mp4" controls="controls" width="100%" title="GARUDA Annotated Output Set 1"></video> |
+| **Scene 2 — Dense Traffic (Set 2)**<br><video src="BACKEND_REFERENCE_VIDEO/WhatsApp Video 2026-06-23 at 11.51.08.mp4" controls="controls" width="100%" title="Raw Input Set 2"></video> | **GARUDA Output (Set 2)**<br><video src="BACKEND_REFERENCE_VIDEO/result/annotated_result_2_annotated.mp4" controls="controls" width="100%" title="GARUDA Annotated Output Set 2"></video> |
 
-![Raw Input — MG Road Intersection](test/pipeline_results/WhatsAppImage2026-06-20at12.24.39PM.jpeg/raw/VIO-BLR-20260621-203910-FCE56C_raw.jpg)
-
-
-![GARUDA Annotated Output — TRIPLE RIDING 95%](test/pipeline_results/WhatsAppImage2026-06-20at12.24.39PM.jpeg/annotated/VIO-BLR-20260621-203910-FCE56C.jpg)
-
-
-**Scene 2 — Helmet Non-Compliance Detected (Bangalore Traffic, Rear Angle)**
-*Raw Input → GARUDA Output: motorcycle rider without helmet flagged. Partial plate `G50226` read at 35% OCR confidence — low angle, motion blur, partial plate coverage. Tier-2 human review routed.*
-
-![Raw Input — Helmet Non-Compliance](test/pipeline_results/WhatsAppImage2026-06-20at12.24.46PM.jpeg/raw/VIO-BLR-20260621-203923-1C6448_raw.jpg)
-
-
-![GARUDA Annotated Output — HELMET NON COMPLIANCE, Tier-2](test/pipeline_results/WhatsAppImage2026-06-20at12.24.46PM.jpeg/annotated/VIO-BLR-20260621-203923-1C6448.jpg)
-
-
-**Scene 3 — Dense Traffic Multi-Detection: Seatbelt + Wrong-Way + Stop-Line (20+ vehicles)**
-*Single frame, 20+ tracked vehicles. Seatbelt OK (green) across all visible car windshields. Multiple wrong-way candidates flagged for human review (orange "???"). Stop-line zone visible. This is the exact frame type the pipeline processes in real-time via the patrol WebSocket.*
-
-![GARUDA Multi-Detection Output — Seatbelt + Wrong-Way + Stop-Line, Dense Indian Traffic](test/pipeline_results/seatbelt_check/demo_result.jpg)
-``
 ---
 
 ### 📊 Model Performance at a Glance
