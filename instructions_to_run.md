@@ -8,6 +8,7 @@ Follow these step-by-step instructions to run the entire **GARUDA** platform (Fa
 Before starting, ensure your host machine has the following tools installed:
 * **Python 3.10+** (Required by open-image-models license plate detector).
 * **Node.js (v18 or v20+)** & **npm** (Required by the Next.js dashboard).
+* **Ollama** (Required for the local Gemma-3 AI Copilot).
 * **Git** (For version control and pulls).
 
 ---
@@ -55,6 +56,26 @@ The backend server manages the REST endpoints, registers cameras, tracks repeat 
    * **HTTPS Verification:** Since the repository contains `cert.pem` and `key.pem` local certificates, the backend starts automatically in secure mode at:
      **`https://localhost:8000`**
    * **API Swagger Documentation:** Open [https://localhost:8000/docs](https://localhost:8000/docs) in your browser (ignore the browser's self-signed certificate warnings) to view the interactive API playground.
+
+---
+
+## 🧠 Step 2.5: Set Up the Local Gemma-3 AI Copilot (Ollama)
+
+The platform includes a local AI agent to translate conversational text into database actions.
+
+1. **Download and Install Ollama:**
+   Download Ollama for macOS/Linux/Windows from [ollama.com](https://ollama.com) and install the application.
+2. **Pull the Gemma-3 1B Model:**
+   Open a new terminal tab and pull the lightweight Gemma-3 model:
+   ```bash
+   ollama pull gemma3:1b
+   ```
+3. **Verify the Model Runs:**
+   Make sure the model starts locally (Ollama runs on port `11434` by default):
+   ```bash
+   ollama run gemma3:1b
+   ```
+   *(To exit the interactive Ollama command line, type `/exit`)*.
 
 ---
 
