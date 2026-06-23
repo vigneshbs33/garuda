@@ -22,6 +22,33 @@ const TIER_LABEL: Record<number, string> = {
 
 const NOISE_PLATE_TEXTS = ["UNCLEAR", "PLATE-UNREAD", ""];
 
+const componentStyles = `
+  @keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 0.95; }
+  }
+  .skeleton-pulse {
+    animation: pulse 1.8s infinite ease-in-out;
+  }
+  .custom-dropdown-item:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-accent);
+  }
+  .spinner {
+    border: 3px solid #e2e8f0;
+    border-top: 3px solid var(--border-accent-dark);
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+  }
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+`;
+
 function RecordCard({ record, index }: { record: PipelineRecord; index: number }) {
   const [activeTab, setActiveTab] = useState<"annotated" | "demo" | "raw">("annotated");
   const paths = {
@@ -46,7 +73,7 @@ function RecordCard({ record, index }: { record: PipelineRecord; index: number }
         </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: "10px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "10px" }}>
         <div className="evidence-pane" style={{ minHeight: "0" }}>
           <div className="evidence-stages">
             <div className={`stage-tab ${activeTab === "annotated" ? "active" : ""}`} onClick={() => setActiveTab("annotated")}>
@@ -67,9 +94,7 @@ function RecordCard({ record, index }: { record: PipelineRecord; index: number }
                 style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }}
               />
             ) : (
-              <div style={{ color: "#94a3b8", fontSize: "12px", textAlign: "center" }}>
-                No {activeTab} frame stored.
-              </div>
+              <div className="skeleton-pulse" style={{ width: "100%", height: "220px", backgroundColor: "#334155" }} />
             )}
           </div>
         </div>
@@ -309,7 +334,7 @@ function TimelineFrameDetail({
         </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: "10px", marginTop: "10px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "10px", marginTop: "10px" }}>
         <div className="evidence-pane" style={{ minHeight: "0" }}>
           <div className="evidence-stages">
             <div className={`stage-tab ${activeFrameTab === "annotated" ? "active" : ""}`} onClick={() => setActiveFrameTab("annotated")}>
@@ -330,9 +355,7 @@ function TimelineFrameDetail({
                 style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }}
               />
             ) : (
-              <div style={{ color: "#94a3b8", fontSize: "12px", textAlign: "center" }}>
-                No {activeFrameTab} frame stored.
-              </div>
+              <div className="skeleton-pulse" style={{ width: "100%", height: "220px", backgroundColor: "#334155" }} />
             )}
           </div>
         </div>
@@ -484,6 +507,88 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
     return <div style={{ padding: "60px", textAlign: "center", color: "var(--danger)" }}>{error || "Job result not found."}</div>;
   }
 
+  if (result.records.length === 0 && (result.job.status === "Processing" || result.job.status === "Queued")) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <style dangerouslySetInnerHTML={{ __html: componentStyles }} />
+        {/* Header section skeleton */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <div>
+            <button className="btn btn-secondary btn-sm" onClick={() => router.push("/evidence")} style={{ marginBottom: "6px" }}>
+              <ChevronLeftIcon size={12} /> BACK
+            </button>
+            <h1 style={{ fontSize: "20px", fontWeight: "700", letterSpacing: "-0.5px" }}>{result.job.name}</h1>
+            <p style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginTop: "2px" }}>
+              <span className="mono">{result.job.id}</span> · {result.job.source_type} · Processing...
+            </p>
+          </div>
+        </div>
+
+        {/* Dynamic ML Pipeline processing card */}
+        <div className="card" style={{
+          backgroundColor: "var(--bg-tertiary)",
+          border: "1px solid var(--border-accent)",
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          transform: "none"
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontWeight: "700", color: "var(--text-accent)", display: "flex", alignItems: "center", gap: "8px" }}>
+              <div className="spinner" style={{ width: "14px", height: "14px", borderWidth: "2px", margin: "0" }}></div>
+              RUNNING REAL ML INFERENCE PIPELINE
+            </span>
+            <span className="mono" style={{ fontWeight: "700" }}>{result.job.progress}% COMPLETE</span>
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+            Running object detection (YOLOv8), OCR extraction (EasyOCR/PaddleOCR), and Garuda traffic violation rules engine checks...
+            {result.rendering_eta !== undefined && result.rendering_eta !== null && result.rendering_eta > 0 && (
+              <span style={{ fontWeight: "700", marginLeft: "6px", color: "var(--warning)" }}>
+                Estimated time remaining: {Math.ceil(result.rendering_eta)}s
+              </span>
+            )}
+          </div>
+          <div className="progress-bar-outer" style={{ height: "6px", backgroundColor: "#e2e8f0" }}>
+            <div className="progress-bar-inner" style={{ width: `${result.job.progress}%`, backgroundColor: "var(--border-accent-dark)" }} />
+          </div>
+        </div>
+
+        {/* Metrics breakdown skeleton */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "10px" }}>
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="metric-card skeleton-pulse" style={{ height: "60px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", padding: "10px" }}>
+              <div style={{ width: "60px", height: "8px", backgroundColor: "var(--border-color)", marginBottom: "8px", borderRadius: "4px" }} />
+              <div style={{ width: "30px", height: "16px", backgroundColor: "var(--border-color)", borderRadius: "4px" }} />
+            </div>
+          ))}
+        </div>
+
+        {/* Columns skeleton */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "12px", alignItems: "start" }}>
+          {/* Left Column Skeletons */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="card skeleton-pulse" style={{ height: "110px", backgroundColor: "var(--bg-secondary)", transform: "none", padding: "12px" }}>
+                <div style={{ width: "100px", height: "10px", backgroundColor: "var(--border-color)", marginBottom: "12px", borderRadius: "4px" }} />
+                <div style={{ width: "180px", height: "8px", backgroundColor: "var(--border-color)", marginBottom: "8px", borderRadius: "4px" }} />
+                <div style={{ width: "140px", height: "8px", backgroundColor: "var(--border-color)", borderRadius: "4px" }} />
+              </div>
+            ))}
+          </div>
+
+          {/* Right Column Skeletons */}
+          <div className="card skeleton-pulse" style={{ height: "400px", backgroundColor: "var(--bg-secondary)", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: "12px", transform: "none" }}>
+            <div className="spinner" style={{ width: "32px", height: "32px", borderWidth: "3px" }} />
+            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", letterSpacing: "0.2px" }}>
+              WAITING FOR PIPELINE RESULTS JSON...
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const agg = aggregateRecords(result.records);
   const totalViolations = agg.violationsByType.reduce((sum, v) => sum + v.count, 0);
 
@@ -559,33 +664,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
   const focusedFrameIdx = focusedTimelineOffset === -6 ? framePrevIdx : focusedTimelineOffset === 6 ? frameNextIdx : frameCurrIdx;
   const focusedRecord = result.records[focusedFrameIdx] || null;
 
-  // Custom styling block injected for pulse effect and dropdown styling
-  const componentStyles = `
-    @keyframes pulse {
-      0%, 100% { opacity: 0.6; }
-      50% { opacity: 0.95; }
-    }
-    .skeleton-pulse {
-      animation: pulse 1.8s infinite ease-in-out;
-    }
-    .custom-dropdown-item:hover {
-      background-color: var(--bg-tertiary);
-      color: var(--text-accent);
-    }
-    .spinner {
-      border: 3px solid #e2e8f0;
-      border-top: 3px solid var(--border-accent-dark);
-      border-radius: 50%;
-      width: 24px;
-      height: 24px;
-      animation: spin 1s linear infinite;
-      margin: 0 auto;
-    }
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-  `;
+  // Custom styling block injected at the module level
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -640,7 +719,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
       )}
 
       {/* Metrics breakdown */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "10px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "10px" }}>
         <div className="metric-card">
           <div className="metric-title">Items Processed</div>
           <div className="metric-value">{agg.itemCount}</div>
@@ -664,7 +743,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
       </div>
 
       {/* Split Layout: PipelineBreakdown sidebar + main content panel */}
-      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: "12px", alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "12px", alignItems: "start" }}>
         <div>
           <PipelineBreakdown agg={agg} job={result.job} />
         </div>
@@ -689,7 +768,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
                 No records in this job's result summary.
               </div>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: "12px", alignItems: "start" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "12px", alignItems: "start" }}>
                 {/* Batch list sidebar menu */}
                 <div className="card" style={{
                   padding: "8px",
@@ -822,7 +901,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
                 ) : (
                   /* Live Video Viewports */
                   videoTab === "side-by-side" ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "10px" }}>
                       <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                         <span style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>Demo Debug Video</span>
                         <video
@@ -1005,7 +1084,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
                           Violation Timeline Sequence (-1.0s, Incident, +1.0s)
                         </div>
                         
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "10px" }}>
                           {/* -1.0 Second Frame Card */}
                           <div
                             onClick={() => setFocusedTimelineOffset(-6)}
@@ -1026,7 +1105,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
                               {recordPrev?.evidence?.annotated_image ? (
                                 <img src={evidenceFileUrl(recordPrev.evidence.annotated_image)} alt="Before" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                               ) : (
-                                <span style={{ fontSize: "10px", color: "#94a3b8" }}>No Image</span>
+                                <div className="skeleton-pulse" style={{ width: "100%", height: "100%", backgroundColor: "var(--border-color)" }} />
                               )}
                             </div>
                             <div style={{ fontSize: "8px", marginTop: "4px", color: "var(--text-muted)" }} className="mono">
@@ -1054,7 +1133,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
                               {recordCurr?.evidence?.annotated_image ? (
                                 <img src={evidenceFileUrl(recordCurr.evidence.annotated_image)} alt="Incident" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                               ) : (
-                                <span style={{ fontSize: "10px", color: "#94a3b8" }}>No Image</span>
+                                <div className="skeleton-pulse" style={{ width: "100%", height: "100%", backgroundColor: "var(--border-color)" }} />
                               )}
                             </div>
                             <div style={{ fontSize: "8px", marginTop: "4px", color: "var(--text-muted)" }} className="mono">
@@ -1082,7 +1161,7 @@ export default function JobResultModule({ jobId }: { jobId: string }) {
                               {recordNext?.evidence?.annotated_image ? (
                                 <img src={evidenceFileUrl(recordNext.evidence.annotated_image)} alt="After" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                               ) : (
-                                <span style={{ fontSize: "10px", color: "#94a3b8" }}>No Image</span>
+                                <div className="skeleton-pulse" style={{ width: "100%", height: "100%", backgroundColor: "var(--border-color)" }} />
                               )}
                             </div>
                             <div style={{ fontSize: "8px", marginTop: "4px", color: "var(--text-muted)" }} className="mono">

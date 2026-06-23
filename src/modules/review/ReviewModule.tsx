@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { usePlatform, Violation } from "@/context/PlatformContext";
 import { CloseIcon, DownloadIcon } from "@/components/Icons";
 import { STATUS_LABELS, STATUS_BADGE_CLASS, SEVERITY_COLOR } from "@/lib/violations";
+import { getApiBase, getMediaBase } from "@/lib/evidence";
 
 interface ReviewLogEntry {
   id: number;
@@ -16,7 +17,7 @@ interface ReviewLogEntry {
 }
 
 export default function ReviewModule() {
-  const { violations, role, reviewViolation, reviewViolationItem, fetchViolationDetail } = usePlatform();
+  const { violations, role, reviewViolation, reviewViolationItem, fetchViolationDetail, deleteViolation, batchDeleteViolations, sendChallanSms } = usePlatform();
   const searchParams = useSearchParams();
 
   const [selectedId, setSelectedId] = useState<string>("");
@@ -27,22 +28,50 @@ export default function ReviewModule() {
   const [reviewHistory, setReviewHistory] = useState<ReviewLogEntry[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const mediaBase = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "";
+  const mediaBase = getMediaBase();
+
+  const filteredViolations = useMemo(() => {
+    const seenIds = new Set<string>();
+    const seenPlates = new Set<string>();
+    return violations.filter(v => {
+      const plateText = v.plateNumber ? v.plateNumber.trim() : "";
+      if (!plateText) return false; // No plate detected/cropped
+      
+      const ocrFailed = plateText.toUpperCase().includes("UNREAD") || plateText === "";
+      const lowAccuracy = v.plateConfidence < 60;
+      if (!ocrFailed && !lowAccuracy) return false;
+      
+      if (seenIds.has(v.id)) return false;
+      seenIds.add(v.id);
+      
+      // Deduplicate by plate number if it was read
+      if (!ocrFailed) {
+        const plateUpper = plateText.toUpperCase();
+        if (seenPlates.has(plateUpper)) return false;
+        seenPlates.add(plateUpper);
+      }
+      return true;
+    });
+  }, [violations]);
+
+  const pendingQueue = useMemo(() => {
+    return filteredViolations.filter(v => v.status === "pending");
+  }, [filteredViolations]);
 
   // Sync selectedId with URL parameter if present
   useEffect(() => {
     const urlId = searchParams?.get("id");
-    if (urlId && violations.some(v => v.id === urlId)) {
+    if (urlId && filteredViolations.some(v => v.id === urlId)) {
       setSelectedId(urlId);
-    } else if (violations.length > 0 && !selectedId) {
-      const pending = violations.find(v => v.status === "pending");
-      setSelectedId(pending ? pending.id : violations[0].id);
+    } else if (filteredViolations.length > 0 && !selectedId) {
+      const pending = filteredViolations.find(v => v.status === "pending");
+      setSelectedId(pending ? pending.id : filteredViolations[0].id);
     }
-  }, [searchParams, violations, selectedId]);
+  }, [searchParams, filteredViolations, selectedId]);
 
   const selectedViolation = useMemo(() => {
-    return violations.find(v => v.id === selectedId) || violations[0];
-  }, [violations, selectedId]);
+    return filteredViolations.find(v => v.id === selectedId) || filteredViolations[0] || null;
+  }, [filteredViolations, selectedId]);
 
   // Pull the full evidence record (real OCR detections, driver alerts,
   // processing info) for the active violation — the synced list only carries
@@ -56,8 +85,7 @@ export default function ReviewModule() {
   // Real review/audit history for this violation
   useEffect(() => {
     if (!selectedId) return;
-    const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
-    fetch(`http://${host}:8000/api/v1/reviews`)
+    fetch(`${getApiBase()}/reviews`)
       .then(res => res.ok ? res.json() : [])
       .then((data: ReviewLogEntry[]) => setReviewHistory(data.filter(r => r.target === selectedId)))
       .catch(() => setReviewHistory([]));
@@ -70,14 +98,46 @@ export default function ReviewModule() {
     }
   }, [selectedViolation?.id]);
 
-  const pendingQueue = useMemo(() => {
-    return violations.filter(v => v.status === "pending");
-  }, [violations]);
-
   const advanceToNext = useCallback(() => {
     const next = pendingQueue.find(v => v.id !== selectedViolation?.id);
     if (next) setSelectedId(next.id);
   }, [pendingQueue, selectedViolation]);
+
+  const handleDeleteCurrent = async () => {
+    if (!selectedViolation) return;
+    if (!window.confirm(`Delete active violation event ${selectedViolation.id}?`)) return;
+    try {
+      const activeId = selectedViolation.id;
+      // Find the next one in violations to inspect
+      const remaining = filteredViolations.filter(v => v.id !== activeId);
+      await deleteViolation(activeId);
+      if (remaining.length > 0) {
+        const pending = remaining.find(v => v.status === "pending");
+        setSelectedId(pending ? pending.id : remaining[0].id);
+      } else {
+        setSelectedId("");
+      }
+    } catch (err) {
+      alert("Delete failed: " + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleDeleteAllPending = async () => {
+    if (pendingQueue.length === 0) return;
+    if (!window.confirm(`Delete all ${pendingQueue.length} pending violations in the queue?`)) return;
+    try {
+      const pendingIds = pendingQueue.map(v => v.id);
+      const remaining = filteredViolations.filter(v => !pendingIds.includes(v.id));
+      await batchDeleteViolations(pendingIds);
+      if (remaining.length > 0) {
+        setSelectedId(remaining[0].id);
+      } else {
+        setSelectedId("");
+      }
+    } catch (err) {
+      alert("Batch delete failed: " + (err instanceof Error ? err.message : String(err)));
+    }
+  };
 
   const handleApprove = () => {
     if (!selectedViolation) return;
@@ -145,8 +205,26 @@ export default function ReviewModule() {
             Audit AI-flagged violations against real evidence, override OCR readings, and issue or void citations
           </p>
         </div>
-        <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-accent)" }}>
-          Pending In Queue: <span className="mono" style={{ padding: "1px 6px", background: "var(--border-accent)", borderRadius: "4px" }}>{pendingQueue.length}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-accent)" }}>
+            Pending In Queue: <span className="mono" style={{ padding: "1px 6px", background: "var(--border-accent)", borderRadius: "4px" }}>{pendingQueue.length}</span>
+          </div>
+          <button
+            className="btn btn-danger btn-sm"
+            onClick={handleDeleteCurrent}
+            disabled={!selectedViolation}
+            title="Delete current violation case from system"
+          >
+            ✕ CLEAR CURRENT
+          </button>
+          <button
+            className="btn btn-danger btn-sm"
+            onClick={handleDeleteAllPending}
+            disabled={pendingQueue.length === 0}
+            title="Delete all pending violations in the queue"
+          >
+            ✕ BATCH CLEAR PENDING
+          </button>
         </div>
       </div>
 
@@ -422,6 +500,15 @@ export default function ReviewModule() {
               {/* Decision Action Deck */}
               <div className="inspector-section" style={{ marginTop: "auto", borderTop: "2px solid var(--border-accent)" }}>
                 <h4 style={{ fontWeight: "700", fontSize: "11px", marginBottom: "8px", textTransform: "uppercase" }}>ENFORCEMENT DECISION</h4>
+
+                {/* Manual SMS trigger button */}
+                <button
+                  onClick={() => sendChallanSms(selectedViolation.id)}
+                  className="btn btn-secondary btn-sm"
+                  style={{ width: "100%", marginBottom: "8px", fontWeight: "700", color: "var(--text-accent)", borderColor: "var(--border-accent-dark)" }}
+                >
+                  ✉ SEND CHALLAN SMS (MANUAL)
+                </button>
 
                 {(selectedViolation.violationItems?.length || 0) > 1 ? (
                   // Multiple findings in this image are resolved individually

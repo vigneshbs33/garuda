@@ -249,18 +249,64 @@ export default function AuthModule() {
             </button>
           </div>
 
-          {/* Email Verification Config Notice */}
+          {/* Test Mode & Autofill */}
           <div style={{
-            marginTop: "24px",
-            padding: "10px",
+            marginTop: "20px",
+            padding: "12px",
             backgroundColor: "var(--bg-secondary)",
-            borderRadius: "4px",
-            border: "1px dashed var(--border-color)",
-            fontSize: "9px",
-            color: "var(--text-muted)",
-            lineHeight: "1.4"
+            borderRadius: "6px",
+            border: "1px solid var(--border-color)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px"
           }}>
-            <b style={{ color: "var(--text-secondary)" }}>EMAIL SERVICE NOTICE:</b> Real-time email verification is active. Make sure SMTP keys are configured in your <code style={{ fontFamily: "monospace" }}>.env</code> file. Check your inbox (including spam) for the activation link. Seed accounts are pre-registered with password suffix <b>"123"</b> (e.g. <b>keshav@enforcement.gov</b> / <b>admin123</b>).
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-accent)", letterSpacing: "0.5px" }}>
+                ⚙️ TEST MODE ACTIVE
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail("amit@controlroom.gov");
+                  setPassword("amit123");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "6px",
+                  fontSize: "10px",
+                  fontWeight: "600",
+                  backgroundColor: "var(--card-bg)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  color: "var(--text-primary)"
+                }}
+              >
+                Autofill Operator
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail("keshav@enforcement.gov");
+                  setPassword("admin123");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "6px",
+                  fontSize: "10px",
+                  fontWeight: "600",
+                  backgroundColor: "var(--border-accent-dark)",
+                  border: "1px solid var(--border-accent-dark)",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  color: "var(--text-accent)"
+                }}
+              >
+                Autofill Admin
+              </button>
+            </div>
           </div>
 
         </div>

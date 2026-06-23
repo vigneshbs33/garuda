@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     # Twilio (leave empty = mock/log mode)
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_API_KEY: str = ""
+    TWILIO_API_SECRET: str = ""
     TWILIO_FROM_NUMBER: str = ""       # e.g. +14155238886 (WhatsApp sandbox)
     TWILIO_WHATSAPP_FROM: str = ""     # whatsapp:+14155238886
     ALERTS_ENABLED: bool = False       # Set True only when Twilio creds are set

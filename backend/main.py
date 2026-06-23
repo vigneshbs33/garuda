@@ -34,6 +34,12 @@ _startup_time = time.time()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Setup basic logging config
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        force=True,
+    )
     # Startup
     logger.info("GARUDA API starting up…")
     await init_db()
@@ -109,7 +115,7 @@ app.include_router(reviews.router,    prefix=API_PREFIX, tags=["Reviews"])
 app.include_router(evidence.router,   prefix=API_PREFIX, tags=["Evidence"])
 app.include_router(users.router,      prefix=API_PREFIX, tags=["Users"])
 app.include_router(audit_logs.router, prefix=API_PREFIX, tags=["Audit Logs"])
-app.include_router(agent.router,      prefix=API_PREFIX, tags=["Gemma AI Agent"])
+app.include_router(agent.router,      prefix=API_PREFIX, tags=["Command Search"])
 
 # Serve evidence images as static files
 import os

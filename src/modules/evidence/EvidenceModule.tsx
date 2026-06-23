@@ -7,8 +7,6 @@ import { UploadIcon, RefreshIcon, PlayIcon, CloseIcon } from "@/components/Icons
 import {
   uploadSingle,
   uploadBatch,
-  fetchTestGalleryList,
-  testGalleryImageUrl,
   deleteJob,
   clearAllJobs,
   evidenceFileUrl,
@@ -36,14 +34,17 @@ export default function EvidenceModule() {
   const [stopLineY, setStopLineY] = useState<number>(380);
   const [parkingTimer, setParkingTimer] = useState<number>(10);
 
-  const [galleryFiles, setGalleryFiles] = useState<string[]>([]);
-  const [galleryLoading, setGalleryLoading] = useState(false);
   const [hiddenJobIds, setHiddenJobIds] = useState<Set<string>>(new Set());
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
+  const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    fetchTestGalleryList().then(setGalleryFiles);
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   const resetForm = useCallback(() => {
@@ -91,21 +92,7 @@ export default function EvidenceModule() {
     }
   };
 
-  const handleGalleryPick = async (filename: string) => {
-    setGalleryLoading(true);
-    setError(null);
-    try {
-      const url = testGalleryImageUrl(filename);
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const file = new File([blob], filename, { type: blob.type || "image/jpeg" });
-      await uploadSingle({ name: filename, sourceType: "Image", file, cameraId: null, token });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load test image.");
-    } finally {
-      setGalleryLoading(false);
-    }
-  };
+
 
   const handleDeleteJob = async (jobId: string) => {
     if (!window.confirm(`Delete job ${jobId}? This removes its violations and evidence images permanently.`)) return;
@@ -113,6 +100,11 @@ export default function EvidenceModule() {
     try {
       await deleteJob(jobId, token);
       setHiddenJobIds((prev) => new Set(prev).add(jobId));
+      setSelectedJobIds((prev) => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed.");
     } finally {
@@ -126,10 +118,51 @@ export default function EvidenceModule() {
     try {
       await clearAllJobs(token);
       setHiddenJobIds(new Set(jobs.map((j) => j.id)));
+      setSelectedJobIds(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Clear all failed.");
     } finally {
       setClearingAll(false);
+    }
+  };
+
+  const handleToggleJobSelect = (jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedJobIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) {
+        next.delete(jobId);
+      } else {
+        next.add(jobId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllJobs = () => {
+    const visibleJobs = sortedJobs.map(j => j.id);
+    if (selectedJobIds.size === visibleJobs.length && visibleJobs.length > 0) {
+      setSelectedJobIds(new Set());
+    } else {
+      setSelectedJobIds(new Set(visibleJobs));
+    }
+  };
+
+  const handleBatchDeleteJobs = async () => {
+    if (selectedJobIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedJobIds.size} selected job(s)? This removes their violations and evidence images permanently.`)) return;
+    
+    setSubmitting(true);
+    try {
+      for (const id of Array.from(selectedJobIds)) {
+        await deleteJob(id, token);
+        setHiddenJobIds((prev) => new Set(prev).add(id));
+      }
+      setSelectedJobIds(new Set());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Batch deletion failed.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -147,7 +180,7 @@ export default function EvidenceModule() {
         </p>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: "12px", alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "380px 1fr", gap: "12px", alignItems: "start" }}>
 
         {/* Upload card */}
         <div className="card" style={{ transform: "none" }}>
@@ -270,35 +303,24 @@ export default function EvidenceModule() {
             </button>
           </form>
 
-          {galleryFiles.length > 0 && (
-            <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-color)", paddingTop: "10px" }}>
-              <div style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase" }}>
-                Quick Pick — Test Gallery
-              </div>
-              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                {galleryFiles.slice(0, 12).map((f) => (
-                  <button
-                    key={f}
-                    type="button"
-                    disabled={galleryLoading}
-                    onClick={() => handleGalleryPick(f)}
-                    className="btn btn-secondary btn-sm"
-                    title={f}
-                    style={{ padding: "2px 0", width: "44px", height: "44px", overflow: "hidden" }}
-                  >
-                    <img src={testGalleryImageUrl(f)} alt={f} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+
         </div>
 
         {/* Render progress / rendered playback / Recent jobs */}
         <div className="card" style={{ transform: "none" }}>
             <div className="card-title">
               <span>RECENT JOBS</span>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {selectedJobIds.size > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={handleBatchDeleteJobs}
+                    disabled={submitting}
+                  >
+                    DELETE SELECTED ({selectedJobIds.size})
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn btn-danger btn-sm"
@@ -314,6 +336,14 @@ export default function EvidenceModule() {
               <table className="dense-table">
                 <thead>
                   <tr>
+                    <th style={{ width: "30px", textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={sortedJobs.length > 0 && selectedJobIds.size === sortedJobs.length}
+                        onChange={handleToggleSelectAllJobs}
+                        style={{ cursor: "pointer" }}
+                      />
+                    </th>
                     <th>JOB</th>
                     <th>TYPE</th>
                     <th>UPLOADED</th>
@@ -326,19 +356,28 @@ export default function EvidenceModule() {
                 <tbody>
                   {sortedJobs.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ textAlign: "center", color: "var(--text-muted)", padding: "20px" }}>
+                      <td colSpan={8} style={{ textAlign: "center", color: "var(--text-muted)", padding: "20px" }}>
                         No jobs submitted yet.
                       </td>
                     </tr>
                   ) : (
                     sortedJobs.map((j) => {
-                      const isViewable = j.status === "Completed" || (j.status === "Processing" && j.progress >= 70);
+                      const isViewable = j.status === "Completed" || j.status === "Processing";
+                      const isSelected = selectedJobIds.has(j.id);
                       return (
                         <tr
                           key={j.id}
                           onClick={() => isViewable && router.push(`/evidence/${j.id}`)}
                           style={{ cursor: isViewable ? "pointer" : "default" }}
                         >
+                          <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => handleToggleJobSelect(j.id, e as any)}
+                              style={{ cursor: "pointer" }}
+                            />
+                          </td>
                           <td>
                             <div className="mono" style={{ fontWeight: "700" }}>{j.id}</div>
                             <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>{j.name}</div>

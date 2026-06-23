@@ -1,11 +1,10 @@
 "use client";
-
+ 
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { usePlatform, UserRole } from "@/context/PlatformContext";
 import AuthModule from "@/modules/auth/AuthModule";
-import FloatingAgent from "@/components/ui/FloatingAgent";
 import { 
   HomeIcon, 
   CameraIcon, 
@@ -18,11 +17,11 @@ import {
   CloseIcon,
   CheckIcon
 } from "@/components/Icons";
-
+ 
 interface LayoutShellProps {
   children: React.ReactNode;
 }
-
+ 
 export default function LayoutShell({ children }: LayoutShellProps) {
   const pathname = usePathname() || "";
   const { 
@@ -40,22 +39,20 @@ export default function LayoutShell({ children }: LayoutShellProps) {
   } = usePlatform();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
+ 
   React.useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
-
+ 
   // Nav items setup
   const menuItems = [
     { name: "Dashboard", href: "/dashboard", icon: <HomeIcon size={16} /> },
-    { name: "Camera Registry", href: "/cameras", icon: <CameraIcon size={16} /> },
-    { name: "Patrol CCTV", href: "/patrol", icon: <CameraIcon size={16} /> },
-    { name: "Gemma AI Copilot", href: "/agent", icon: <ShieldIcon size={16} /> },
-    { name: "Violation Center", href: "/violations", icon: <AlertIcon size={16} /> },
-    { name: "Review Queue", href: "/review", icon: <ShieldIcon size={16} /> },
-    { name: "Evidence Upload", href: "/evidence", icon: <UploadIcon size={16} /> },
-    { name: "Analytics Center", href: "/analytics", icon: <ChartIcon size={16} /> },
-    { name: "Administration", href: "/settings", icon: <SettingsIcon size={16} /> },
+    { name: "Cameras", href: "/cameras", icon: <CameraIcon size={16} /> },
+    { name: "Violations", href: "/violations", icon: <AlertIcon size={16} /> },
+    { name: "Human Check", href: "/review", icon: <ShieldIcon size={16} /> },
+    { name: "Upload Evidence", href: "/evidence", icon: <UploadIcon size={16} /> },
+    { name: "Analytics", href: "/analytics", icon: <ChartIcon size={16} /> },
+    { name: "Settings", href: "/settings", icon: <SettingsIcon size={16} /> },
   ];
 
   // Derive stats
@@ -325,9 +322,6 @@ export default function LayoutShell({ children }: LayoutShellProps) {
           )}
         </div>
       </div>
-      
-      {/* Global floating Gemma Copilot assistant */}
-      <FloatingAgent />
     </div>
   );
 }

@@ -64,7 +64,7 @@ VIOLATION_SEVERITY: Dict[ViolationType, str] = {
 FINE_AMOUNTS_INR: Dict[ViolationType, int] = {
     ViolationType.HELMET_NON_COMPLIANCE:   1000,
     ViolationType.SEATBELT_NON_COMPLIANCE: 1000,
-    ViolationType.TRIPLE_RIDING:           2000,
+    ViolationType.TRIPLE_RIDING:           1000,
     ViolationType.WRONG_SIDE_DRIVING:      5000,
     ViolationType.STOP_LINE_VIOLATION:      500,
     ViolationType.RED_LIGHT_VIOLATION:     1000,

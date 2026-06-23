@@ -31,10 +31,17 @@ class AlertService:
     def _init_twilio(self) -> None:
         try:
             from twilio.rest import Client  # type: ignore
-            self._twilio_client = Client(
-                settings.TWILIO_ACCOUNT_SID,
-                settings.TWILIO_AUTH_TOKEN,
-            )
+            if settings.TWILIO_API_KEY and settings.TWILIO_API_SECRET:
+                self._twilio_client = Client(
+                    settings.TWILIO_API_KEY,
+                    settings.TWILIO_API_SECRET,
+                    settings.TWILIO_ACCOUNT_SID,
+                )
+            else:
+                self._twilio_client = Client(
+                    settings.TWILIO_ACCOUNT_SID,
+                    settings.TWILIO_AUTH_TOKEN,
+                )
             logger.info("Twilio alert service initialised")
         except ImportError:
             logger.warning("Twilio package not installed. Run: pip install twilio")
@@ -52,21 +59,22 @@ class AlertService:
         via_whatsapp: bool = True,
     ) -> List[dict]:
         """
-        Send violation alert to all officer phones.
+        Send violation alert to all officer phones concurrently.
 
         Returns list of {phone, status, sid_or_error} per recipient.
         """
         phones = recipient_phones or settings.officer_phone_list
-        results = []
 
-        for phone in phones:
-            if self._twilio_client and settings.ALERTS_ENABLED:
-                result = await self._send_twilio(message, phone, via_whatsapp)
-            else:
-                result = self._send_mock(message, phone, via_whatsapp)
-            results.append(result)
+        if not settings.ALERTS_ENABLED:
+            return [self._send_mock(message, phone, via_whatsapp) for phone in phones]
 
-        return results
+        if not self._twilio_client:
+            return [{"phone": phone, "status": "error", "error": "Twilio Client not initialized. Check your credentials."} for phone in phones]
+
+        import asyncio
+        tasks = [self._send_twilio(message, phone, via_whatsapp) for phone in phones]
+        results = await asyncio.gather(*tasks)
+        return list(results)
 
     async def send_tier2_review(
         self,
@@ -128,17 +136,45 @@ class AlertService:
                 from_num = settings.TWILIO_FROM_NUMBER
                 if from_num.startswith("MG"):
                     msg = self._twilio_client.messages.create(
-                        body=message[:160],  # SMS limit
+                        body=message,
                         messaging_service_sid=from_num,
                         to=phone,
                     )
                 else:
                     msg = self._twilio_client.messages.create(
-                        body=message[:160],  # SMS limit
+                        body=message,
                         from_=from_num,
                         to=phone,
                     )
-            logger.info("Alert sent via Twilio to %s | SID: %s", phone, msg.sid)
+            logger.info("Alert dispatched via Twilio to %s | SID: %s. Polling status...", phone, msg.sid)
+            
+            # Poll status briefly to catch immediate carrier/sandbox failures (e.g. Error 21608 unverified caller ID)
+            import asyncio
+            status = msg.status
+            error_code = getattr(msg, "error_code", None)
+            error_message = getattr(msg, "error_message", None)
+            
+            for _ in range(3):
+                if status in ("sent", "delivered", "failed", "undelivered"):
+                    break
+                await asyncio.sleep(0.5)
+                try:
+                    fetched = self._twilio_client.messages(msg.sid).fetch()
+                    status = fetched.status
+                    error_code = fetched.error_code
+                    error_message = fetched.error_message
+                except Exception as fetch_err:
+                    logger.debug("Failed to fetch message status: %s", fetch_err)
+                    break
+            
+            if status in ("failed", "undelivered") or error_code:
+                err_desc = error_message or f"Twilio Error {error_code or 'Unknown'}"
+                if error_code == 21608 or "21608" in str(error_code):
+                    err_desc = "Twilio Trial Limit: Recipient number is not verified in Twilio Console (Error 21608)"
+                logger.error("Twilio message delivery failed to %s: %s", phone, err_desc)
+                return {"phone": phone, "status": "error", "error": err_desc}
+                
+            logger.info("Alert delivered via Twilio to %s | SID: %s | Status: %s", phone, msg.sid, status)
             return {"phone": phone, "status": "sent", "sid": msg.sid}
         except Exception as e:
             logger.error("Twilio send failed to %s: %s", phone, e)

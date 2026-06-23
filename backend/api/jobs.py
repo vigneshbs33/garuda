@@ -248,6 +248,8 @@ def _draw_annotated_evidence(
     location_label: str,
     vid: str,
     plate_crop: Optional[np.ndarray] = None,
+    tracker_states: Optional[dict] = None,
+    fps: float = 6.0,
 ) -> np.ndarray:
     """
     The official "Annotated Evidence" image — final violations only, no
@@ -297,6 +299,17 @@ def _draw_annotated_evidence(
             cv2.rectangle(annotated, (x1, label_y1), (x1 + lw, y1), color, -1)
             cv2.putText(annotated, label, (x1 + 4, max(16, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 255, 255), 1)
 
+            # Draw live "Stationary: Xs" label if tracked vehicle is stationary
+            tid = v.get("track_id")
+            if tid is not None and tracker_states:
+                state = tracker_states.get(tid)
+                if state is not None:
+                    stat_frames = state.stationary_duration_frames()
+                    if stat_frames > 0:
+                        stat_sec = stat_frames / max(fps, 1e-6)
+                        cv2.putText(annotated, f"Stationary: {stat_sec:.0f}s", (x1 + 4, min(y2 + 20, h - 4)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.46, (60, 200, 255), 1)
+
         # Draw license plate crop zoom-in
         if plate_crop is not None:
             v0 = violations[0]
@@ -335,6 +348,8 @@ def _draw_demo_visualization(
     plate_conf: float,
     plate_valid: bool,
     stop_line_y: int,
+    tracker_states: Optional[dict] = None,
+    fps: float = 6.0,
 ) -> np.ndarray:
     """
     The "Demo" debug visualization — identical draw order to
@@ -359,6 +374,19 @@ def _draw_demo_visualization(
         ml.visualizer.draw_driver_alert(demo, driver_alerts[0].alert_type)
     ml.visualizer.draw_tier_badge(demo, tier, action, (10, 90))
     ml.visualizer.draw_plate_result(demo, plate_text or "UNCLEAR", plate_conf, plate_valid)
+
+    # Draw live "Stationary: Xs" label under any tracked vehicle currently stationary
+    if tracker_states:
+        for det in detections:
+            if det.is_vehicle and det.track_id is not None:
+                state = tracker_states.get(det.track_id)
+                if state is not None:
+                    stat_frames = state.stationary_duration_frames()
+                    if stat_frames > 0:
+                        stat_sec = stat_frames / max(fps, 1e-6)
+                        x1, y1, x2, y2 = map(int, det.bbox)
+                        cv2.putText(demo, f"Stationary: {stat_sec:.0f}s", (x1 + 4, min(y2 + 20, demo.shape[0] - 4)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.46, (60, 200, 255), 1)
     return demo
 
 
@@ -374,6 +402,7 @@ def _classify_and_package(
     tracker_states: Optional[dict] = None,
     calibrated: bool = False,
     enable_motion_violations: bool = True,
+    cached_plates: Optional[dict] = None,
 ) -> List[dict]:
     """
     Driver state, OCR, violation classification, and evidence packaging for
@@ -400,28 +429,96 @@ def _classify_and_package(
     # that's a real result, not a placeholder.
     driver_alerts = ml_driver_state.analyze_frame(processed, track_id=0)
 
-    # OCR on each vehicle — collect all visible plates. Uses
-    # read_plate_from_vehicle which scans the full vehicle crop for text.
+    # OCR on each vehicle — collect all visible plates.
+    # Integrates scale gating and OCR caching for optimized video jobs.
     all_plates = []
     for veh in vehicles:
         x1, y1, x2, y2 = map(int, veh.bbox)
-        h_img, w_img = processed.shape[:2]
-        veh_crop = processed[max(0, y1):min(h_img, y2), max(0, x1):min(w_img, x2)]
-        if veh_crop.size > 0:
-            ocr_result = ml_ocr.read_plate_from_vehicle(veh_crop)
-            veh.plate_text = ocr_result.formatted_text or "UNCLEAR"
-            veh.plate_conf = ocr_result.confidence
-            p_crop = ml_ocr.detect_plate_region(veh_crop, [0, 0, veh_crop.shape[1], veh_crop.shape[0]])
+        vehicle_width = x2 - x1
+        bbox_area = vehicle_width * (y2 - y1)
+        
+        # Scale gate: skip plate OCR if too small/far away
+        if vehicle_width < 110:
+            veh.plate_text = "UNCLEAR"
+            veh.plate_conf = 0.0
+            continue
+            
+        track_id = veh.track_id if hasattr(veh, "track_id") else None
+        cached = cached_plates.get(track_id) if (cached_plates is not None and track_id is not None) else None
+        
+        need_ocr = True
+        if cached is not None:
+            moved_closer = bbox_area > cached["bbox_area"] * 1.15
+            if not moved_closer:
+                need_ocr = False
+                
+        if not need_ocr and cached is not None:
+            plate_crop = cached["plate_crop"]
+            formatted_text = cached["text"]
+            confidence = cached["confidence"]
+            is_valid = cached["is_valid"]
+            state_name = cached["state"]
+        else:
+            h_img, w_img = processed.shape[:2]
+            veh_crop = processed[max(0, y1):min(h_img, y2), max(0, x1):min(w_img, x2)]
+            plate_crop = None
+            formatted_text = "UNCLEAR"
+            confidence = 0.0
+            is_valid = False
+            state_name = "Unknown"
+            
+            if veh_crop.size > 0:
+                plate_crop = ml_ocr.detect_plate_region(veh_crop, [0, 0, veh_crop.shape[1], veh_crop.shape[0]])
+                if plate_crop is not None and plate_crop.size > 0:
+                    ocr_res = ml_ocr.read_plate_from_vehicle(veh_crop)
+                    formatted_text = ocr_res.formatted_text or "UNCLEAR"
+                    confidence = ocr_res.confidence
+                    is_valid = ocr_res.is_valid
+                    state_name = ocr_res.state_name
+                    
+                # Update cache
+                if cached_plates is not None and track_id is not None:
+                    if (cached is None or 
+                        confidence > cached["confidence"] or 
+                        (formatted_text != "UNCLEAR" and cached["text"] == "UNCLEAR") or 
+                        bbox_area > cached["bbox_area"] * 1.15):
+                        
+                        final_crop = plate_crop if plate_crop is not None else (cached["plate_crop"] if cached else None)
+                        final_text = formatted_text if formatted_text != "" else (cached["text"] if cached else "UNCLEAR")
+                        final_conf = max(confidence, cached["confidence"]) if cached else confidence
+                        final_valid = is_valid if formatted_text != "UNCLEAR" else (cached["is_valid"] if cached else False)
+                        final_state = state_name if formatted_text != "UNCLEAR" else (cached["state"] if cached else "Unknown")
+                        
+                        cached_plates[track_id] = {
+                            "plate_crop": final_crop,
+                            "text": final_text,
+                            "confidence": final_conf,
+                            "is_valid": final_valid,
+                            "state": final_state,
+                            "bbox_area": bbox_area
+                        }
+        
+        veh.plate_text = formatted_text or "UNCLEAR"
+        veh.plate_conf = confidence
+        
+        should_add = False
+        if plate_crop is not None and plate_crop.size > 0:
+            if is_valid:
+                should_add = True
+            elif len(veh.plate_text.replace("-", "")) >= 4 and confidence >= 0.25:
+                should_add = True
+                
+        if should_add or (cached is not None and cached["text"] != "UNCLEAR"):
             all_plates.append({
-                "plate_text": ocr_result.formatted_text or "UNCLEAR",
-                "confidence": round(ocr_result.confidence, 3),
+                "plate_text": veh.plate_text,
+                "confidence": round(veh.plate_conf, 3),
                 "vehicle_class": veh.class_name,
                 "bbox": list(map(int, veh.bbox)),
-                "ocr_engine": ocr_result.ocr_engine,
-                "state": ocr_result.state_name,
-                "is_valid": ocr_result.is_valid,
-                "plate_crop": p_crop,
-                "track_id": veh.track_id if hasattr(veh, "track_id") else None,
+                "ocr_engine": "YOLO+OCR",
+                "state": state_name,
+                "is_valid": is_valid,
+                "plate_crop": plate_crop if plate_crop is not None else (cached["plate_crop"] if cached else None),
+                "track_id": track_id,
             })
 
     # Violation classification — runs once for the whole image (pass full
@@ -480,10 +577,13 @@ def _classify_and_package(
         # Match vehicle by bbox to assign its specific plate
         v_plate = "UNCLEAR"
         v_track_id = None
+        for veh in vehicles:
+            if list(map(int, veh.bbox)) == list(map(int, v.bbox)):
+                v_track_id = veh.track_id if hasattr(veh, "track_id") else None
+                break
         for p in all_plates:
             if p["bbox"] == list(map(int, v.bbox)):
                 v_plate = p["plate_text"]
-                v_track_id = p["track_id"]
                 break
         violation_dicts.append({
             "type": v_type_display,
@@ -512,6 +612,8 @@ def _classify_and_package(
     annotated_img = _draw_annotated_evidence(
         img, violation_dicts, best_plate["plate_text"], best_plate["confidence"],
         source_name, vid, best_plate_crop,
+        tracker_states=tracker_states,
+        fps=getattr(ml_classifier, "fps", 6.0),
     )
     annotated_path = f"evidence/annotated/{job_id}/{vid}.jpg"
     cv2.imwrite(annotated_path, annotated_img)
@@ -520,6 +622,8 @@ def _classify_and_package(
         img, detections, violation_dicts, driver_alerts, tier, action,
         best_plate["plate_text"], best_plate["confidence"], best_plate.get("is_valid", False),
         ml_classifier.stop_line_y,
+        tracker_states=tracker_states,
+        fps=getattr(ml_classifier, "fps", 6.0),
     )
     demo_path = f"evidence/demo/{job_id}/{vid}.jpg"
     cv2.imwrite(demo_path, demo_img)
@@ -701,6 +805,7 @@ def _run_ml_on_batch(
 
     tracker = None
     first_sampled = True
+    cached_plates = {} if is_sequence else None
     if is_sequence:
         from ml.pipeline.tracker import VehicleTracker
         tracker = VehicleTracker(stop_line_y=calibration["stop_line_y"])
@@ -742,6 +847,7 @@ def _run_ml_on_batch(
                 tracker_states=tracker_states,
                 calibrated=calibration["calibrated"],
                 enable_motion_violations=is_sequence,
+                cached_plates=cached_plates,
             ))
         except Exception as e:
             logger.error("ML inference error in batch job %s (file %s): %s", job_id, filename, e, exc_info=True)
@@ -792,6 +898,8 @@ def _run_ml_on_video(
     frames_processed = 0
     tracker = VehicleTracker(stop_line_y=calibration["stop_line_y"])
     first_sampled_frame = True
+    reported = defaultdict(set)
+    cached_plates = {}
 
     out_dir = "evidence/video"
     os.makedirs(out_dir, exist_ok=True)
@@ -854,9 +962,42 @@ def _run_ml_on_video(
                     tracker_states=tracker_states,
                     calibrated=calibration["calibrated"],
                     enable_motion_violations=True,
+                    cached_plates=cached_plates,
                 )
 
+                # Deduplicate violation occurrences per vehicle track ID in video mode
+                filtered_results = []
                 for r in frame_results:
+                    rec = r["record"]
+                    v_list = rec.get("violations", [])
+                    fresh_v = []
+                    for v in v_list:
+                        tid = v.get("track_id")
+                        vtype = v.get("type")
+                        if tid is not None and vtype is not None:
+                            if vtype in reported[tid]:
+                                continue
+                            reported[tid].add(vtype)
+                        fresh_v.append(v)
+                    
+                    rec["violations"] = fresh_v
+                    if not fresh_v:
+                        r["status"] = "passed"
+                        rec["tier"] = 1
+                        rec["action"] = "PASSED"
+                        r["tier"] = 1
+                    else:
+                        if all(vd["tier"] == 1 for vd in fresh_v):
+                            rec["tier"] = 1
+                            rec["action"] = "AUTO_CHALLAN"
+                            r["tier"] = 1
+                        else:
+                            rec["tier"] = 2
+                            rec["action"] = "HUMAN_REVIEW"
+                            r["tier"] = 2
+                    filtered_results.append(r)
+
+                for r in filtered_results:
                     (passed_results if r["status"] == "passed" else violation_results).append(r)
 
                 if frame_results:

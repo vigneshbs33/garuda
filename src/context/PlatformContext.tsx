@@ -119,6 +119,9 @@ interface PlatformContextType {
   toggleCameraStatus: (id: string, status: CameraStatus) => void;
   testCameraConnection: (id: string) => Promise<boolean>;
   deleteCamera: (id: string) => void;
+  deleteViolation: (id: string) => Promise<void>;
+  batchDeleteViolations: (ids: string[]) => Promise<void>;
+  sendChallanSms: (id: string) => Promise<void>;
   
   reviewViolation: (
     id: string,
@@ -155,7 +158,13 @@ const PlatformContext = createContext<PlatformContextType | undefined>(undefined
 let API_BASE = "http://localhost:8000/api/v1";
 let WS_BASE = "ws://localhost:8000";
 
-if (typeof window !== "undefined") {
+if (process.env.NEXT_PUBLIC_API_URL) {
+  const url = process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
+  API_BASE = url.endsWith("/api/v1") ? url : `${url}/api/v1`;
+  WS_BASE = url.startsWith("https://")
+    ? url.replace("https://", "wss://")
+    : url.replace("http://", "ws://");
+} else if (typeof window !== "undefined") {
   const protocol = window.location.protocol === "https:" ? "https" : "http";
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
   API_BASE = `${protocol}://${window.location.hostname}:8000/api/v1`;
@@ -641,6 +650,63 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [triggerNotification, token]);
 
+  const deleteViolation = useCallback(async (id: string) => {
+    setViolations(prev => prev.filter(v => v.id !== id));
+    triggerNotification("System Alert", `Violation deleted: ${id}`, "low");
+
+    const headers: HeadersInit = token ? { "Authorization": `Bearer ${token}` } : {};
+
+    try {
+      await fetch(`${API_BASE}/violations/${id}`, {
+        method: "DELETE",
+        headers
+      });
+    } catch (e) {
+      console.log("API offline, deleted violation from memory");
+    }
+  }, [triggerNotification, token]);
+
+  const sendChallanSms = useCallback(async (id: string) => {
+    triggerNotification("System Alert", `Initiating SMS Challan send for violation: ${id}`, "low");
+
+    const headers: HeadersInit = token ? { "Authorization": `Bearer ${token}` } : {};
+
+    try {
+      const res = await fetch(`${API_BASE}/violations/${id}/send-sms`, {
+        method: "POST",
+        headers
+      });
+      if (res.ok) {
+        triggerNotification("System Alert", `SMS Challan sent successfully for violation: ${id}`, "low");
+      } else {
+        throw new Error(`Server returned status ${res.status}`);
+      }
+    } catch (e) {
+      triggerNotification("System Alert", `Failed to send SMS Challan: ${e instanceof Error ? e.message : String(e)}`, "high");
+    }
+  }, [triggerNotification, token]);
+
+  const batchDeleteViolations = useCallback(async (ids: string[]) => {
+    const idSet = new Set(ids);
+    setViolations(prev => prev.filter(v => !idSet.has(v.id)));
+    triggerNotification("System Alert", `Batch deleted ${ids.length} violations`, "low");
+
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+      ...(token ? { "Authorization": `Bearer ${token}` } : {})
+    };
+
+    try {
+      await fetch(`${API_BASE}/violations/batch-delete`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ids })
+      });
+    } catch (e) {
+      console.log("API offline, batch deleted violations from memory");
+    }
+  }, [triggerNotification, token]);
+
   const testCameraConnection = useCallback(async (id: string): Promise<boolean> => {
     if (isBackendConnected) {
       try {
@@ -873,6 +939,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       toggleCameraStatus,
       testCameraConnection,
       deleteCamera,
+      deleteViolation,
+      batchDeleteViolations,
+      sendChallanSms,
       reviewViolation,
       reviewViolationItem,
       submitUploadJob,

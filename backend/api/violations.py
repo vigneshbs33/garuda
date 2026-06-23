@@ -17,7 +17,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import (
@@ -364,3 +364,63 @@ async def public_report_violation(
 
     logger.info("Public violation reported: %s | %s", body.violation_id, body.violation_type)
     return {"violation_id": body.violation_id, "status": obj.status}
+
+
+@router.delete("/violations/{violation_id}", status_code=204)
+async def delete_single_violation(
+    violation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a single violation record by ID."""
+    result = await db.execute(
+        select(ViolationModel).where(ViolationModel.id == violation_id)
+    )
+    obj = result.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail=f"Violation {violation_id} not found")
+        
+    await db.execute(delete(ViolationModel).where(ViolationModel.id == violation_id))
+    await db.commit()
+    return None
+
+
+class BatchDeleteRequest(BaseModel):
+    ids: List[str]
+
+
+@router.post("/violations/batch-delete", status_code=204)
+async def batch_delete_violations(
+    body: BatchDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a batch of violations by their IDs."""
+    if not body.ids:
+        return None
+    await db.execute(delete(ViolationModel).where(ViolationModel.id.in_(body.ids)))
+    await db.commit()
+    return None
+
+
+@router.post("/violations/{violation_id}/send-sms")
+async def manual_send_sms(
+    violation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually send an SMS challan, bypassing the 10-minute rate limit (force=True)."""
+    result = await db.execute(
+        select(ViolationModel).where(ViolationModel.id == violation_id)
+    )
+    obj = result.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail=f"Violation {violation_id} not found")
+
+    from ..services.sms_service import send_challan_sms
+    try:
+        await send_challan_sms(obj, force=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    return {"status": "success", "message": f"Challan SMS manually sent to dual recipients for violation {violation_id}"}
+
+
+
