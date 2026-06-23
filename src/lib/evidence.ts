@@ -13,6 +13,7 @@ export interface RawViolation {
   bbox: number[];
   metadata: Record<string, unknown>;
   plate_text?: string;
+  track_id?: number | null;
 }
 
 export interface RawVehicleInfo {
@@ -21,6 +22,7 @@ export interface RawVehicleInfo {
   plate_confidence: number;
   plate_valid: boolean;
   plate_state?: string;
+  track_id?: number | null;
 }
 
 export interface RawPlateDetection {
@@ -83,6 +85,9 @@ export interface JobSummary {
 export interface JobResult {
   job: JobSummary;
   records: PipelineRecord[];
+  video_url?: string | null;
+  demo_video_url?: string | null;
+  rendering_eta?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,12 +139,16 @@ export async function uploadSingle(opts: {
   sourceType: "Image" | "Video";
   file: File;
   cameraId?: string | null;
+  stopLineY?: number | null;
+  parkingTimer?: number | null;
   token?: string | null;
 }): Promise<JobSummary> {
   const formData = new FormData();
   formData.append("name", opts.name);
   formData.append("source_type", opts.sourceType);
   if (opts.cameraId) formData.append("camera_id", opts.cameraId);
+  if (opts.stopLineY !== undefined && opts.stopLineY !== null) formData.append("stop_line_y", String(opts.stopLineY));
+  if (opts.parkingTimer !== undefined && opts.parkingTimer !== null) formData.append("parking_timer", String(opts.parkingTimer));
   formData.append("file", opts.file, opts.file.name);
 
   const res = await fetch(`${getApiBase()}/jobs/upload`, {
