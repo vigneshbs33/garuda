@@ -22,6 +22,14 @@ GARUDA is an **edge-native, automated traffic violation detection system**. A ca
   - Eliminated the duplicate-ML-singleton bug — both `jobs.py` and `stream.py`'s patrol WebSocket now share one `MLRegistry` instance loaded via `get_ml_registry()`.
   - Reorganised `ml/models/weights/` into `detection/`, `violations/`, `ocr/`, `metrics/` subdirectories.
   - All weight paths updated in `detector.py`, `ocr.py`, and `violation_classifier.py`.
+- **2026-06-23 violation-logic audit** (found by testing against real video, not just unit tests — see `ml/pipeline/violation_classifier.py`):
+  - `check_red_light()` required only that the vehicle be *anywhere* past the stop line in the recent window, not that it actually crossed — a vehicle already parked past the line before the light turned red was wrongly classified as running it. Now requires evidence the vehicle was on the legal side earlier in the same window.
+  - `check_illegal_parking()`'s 5-minute timer used `time.monotonic()` (wall-clock processing time), which has nothing to do with video time for batch/offline jobs. Now anchored to a frame counter scaled by `self.fps`.
+  - `check_wrong_side()` used a raw velocity dot-product threshold, which a vehicle merely turning or changing lanes could trip. Now uses a heading-angle threshold (`WRONG_SIDE_ANGLE_THRESHOLD_DEG = 100`) plus a 2-consecutive-frame persistence counter (`WRONG_SIDE_STRIKES_REQUIRED`) before confirming.
+  - `check_stop_line()` had no confidence floor on the signal reading at all (unlike `check_red_light()`'s 0.60 floor) — a marginal ~0.4-0.5-confidence signal misdetection (e.g. a stray red taillight/sign) was enough to cite a stopped vehicle with no real traffic light nearby. Added the same 0.60 floor to both the tracked and static-fallback versions.
+  - The signal-state debounce buffer (`_smooth_signal_state`) could be dominated by a single isolated false-positive detection (frames with no light detected never entered the buffer, so one stray reading was 100% of it) and never went stale, so two false detections minutes apart could "agree" with each other. Now requires ≥2 agreeing samples and discards the buffer after a detection gap longer than the smoothing window.
+  - `AIHelmetViolationDetector.detect()`'s crop-based fallback derived the head region from the **motorcycle's own bbox**, which is frequently tight around just the bike + lower body and excludes an upright rider's head entirely — confirmed visually on real footage where the crop captured the rider's torso, not their head. Now prefers the bbox of the rider's already-associated person detection (`associate_riders_with_vehicles()`), which reliably includes the head. Also added a confidence floor on `helmet` (compliant) detections symmetric to the existing one on `head` (no-helmet) detections — a single 0.19-confidence "wearing helmet" read was previously enough to silently clear an actually bare-headed rider.
+  - **Known residual limitation, not fixed by the above**: even with the corrected head crop, the trained helmet CNN (`helmet_cnn.pt`) can still confidently (>0.99) misclassify a bare head as helmeted on very small/blurry/distant crops — that's a model-accuracy limitation requiring retraining, not a logic bug. Likewise, ByteTrack's track-ID continuity is unreliable in heavily congested/occluded scenes (observed both as a parking-timer reset and as a wrong-side velocity sign flip on the same physical vehicle) — calibrating tight zones helps, but isn't a complete fix.
 
 ---
 
@@ -68,7 +76,10 @@ Image / Video / Camera Feed
     │   ├─ Helmet:   AICity 9-class detector (helmet_best.pt) on full image, falls back to
     │   │            crop CNN (helmet_cnn.pt) or edge/colour heuristic. Reports the model's
     │   │            real per-box confidence (fixed 2026-06-21 — was a hardcoded 0.50 stub).
-    │   │            Used ONLY for helmet — does not feed triple-riding.
+    │   │            Used ONLY for helmet — does not feed triple-riding. The crop-based
+    │   │            fallback's head region now comes from the rider's own person bbox, not
+    │   │            the motorcycle's bbox (fixed 2026-06-23 — a motorcycle's bbox frequently
+    │   │            excludes an upright rider's head entirely, silently breaking the crop).
     │   ├─ Triple riding: fully independent of the helmet model. Person + motorbike
     │   │            detections from the main YOLOv8m detector are grouped by IoU/position
     │   │            via associate_riders_with_vehicles() (nearest-rider-first, capped at
@@ -77,13 +88,22 @@ Image / Video / Camera Feed
     │   │            group_riders_with_vehicles()
     │   ├─ Seatbelt: windshield-ROI YOLOv11s classifier (seatbelt_classifier.pt), Hough-line
     │   │            fallback if weights missing
-    │   ├─ Signal:   traffic_lights_yolov8x.pt, falls back to HSV colour heuristic
+    │   ├─ Signal:   traffic_lights_yolov8x.pt, falls back to HSV colour heuristic.
+    │   │            Readings are majority-vote smoothed over the last 5 frames before
+    │   │            being trusted (fixed 2026-06-23 — a single isolated false-positive
+    │   │            detection used to be enough to confirm a colour change outright)
     │   └─ Wrong-side / stop-line / red-light / illegal-parking: tracker-based when video
     │       tracking state exists; static-position fallback when only a single image
     │       exists. Stop-line and red-light fallbacks gate on signal-detection
-    │       confidence; wrong-side fallback is a position-only proxy (no heading
+    │       confidence (both now floored at 0.60 — fixed 2026-06-23, stop-line previously
+    │       had no floor at all); wrong-side fallback is a position-only proxy (no heading
     │       signal in a still frame) against a per-camera `wrong_side_lane` setting,
-    │       not a universal rule — calibrate it like `stop_line_y`
+    │       not a universal rule — calibrate it like `stop_line_y`. The tracked red-light
+    │       check now requires an actual crossing (legal-side-then-violating-side), not
+    │       mere presence past the line; the tracked wrong-side check now uses a heading-
+    │       angle threshold + 2-frame persistence instead of a raw velocity dot product;
+    │       illegal-parking's duration timer is anchored to a frame counter instead of
+    │       wall-clock time (all fixed 2026-06-23 — see Status section above)
     ↓
 [Driver State]   ml/pipeline/driver_state.py — MediaPipe FaceMesh → drowsiness, yawn, phone-in-hand
     ↓
@@ -449,17 +469,19 @@ All 9 types are defined in `ml/pipeline/violation_classifier.py:39-73`. The firs
 
 | Type | Fine (₹) | Severity | Detection method |
 |------|----------|----------|-------------------|
-| `helmet_non_compliance` | 1,000 | High | `check_helmet()` — AICity 9-class detector on full image (primary), CNN crop or heuristic fallback. Confidence is the model's real per-box score (`AIHelmetViolationDetector.detect()`) — previously hardcoded to 0.50, fixed 2026-06-21 |
+| `helmet_non_compliance` | 1,000 | High | `check_helmet()` — AICity 9-class detector on full image (primary), CNN crop or heuristic fallback. Confidence is the model's real per-box score (`AIHelmetViolationDetector.detect()`) — previously hardcoded to 0.50, fixed 2026-06-21. Crop-based fallback's head region now sourced from the rider's person bbox instead of the motorcycle's bbox, and a `head` (no-helmet) read needs ≥0.40 confidence symmetric to a `helmet` (compliant) read needing the same — previously a low-confidence "helmet" read could silently override an actual bare head (both fixed 2026-06-23). **Residual limitation**: the trained CNN itself can still confidently misclassify a bare head as helmeted on very small/blurry/distant crops — a model-accuracy issue, not something fixable in this layer |
 | `seatbelt_non_compliance` | 1,000 | Medium | `check_seatbelt()` — YOLOv11s on windshield ROI, Hough-line fallback. Skips vehicles whose bbox exceeds 35% of frame area (added 2026-06-21 — oversized/frame-filling boxes like a close-up truck have no real windshield in that crop and were producing overconfident false positives) |
 | `triple_riding` | 2,000 | High | `check_triple_riding()` — **independent of the helmet model** (decoupled 2026-06-21). Uses person + motorbike detections straight from the main YOLOv8m detector, grouped via `associate_riders_with_vehicles()`: IoU + position heuristic ported from `temp/AI_Traffic_Violation_Detection_triple_riding_detection`'s `group_riders_with_vehicles()` — nearest-rider-first, capped at 4/vehicle, persons assigned to at most one vehicle per frame. Computed once per frame in `check_all()` and shared across all two-wheelers |
-| `wrong_side_driving` | 5,000 | Critical | Tracker: `check_wrong_side()` using velocity vector. Image-only: `_check_wrong_side_static()` — position-only proxy (no heading in a still frame) against the per-camera `wrong_side_lane` setting ("left"/"right", default "left"); only fires at moderate conf (0.60), treat as Tier-2 review material, not auto-challan |
-| `stop_line_violation` | 500 | Medium | Tracker: `check_stop_line()` over N-frame history. Image-only: `_check_stop_line_static()` — position vs. stop-line-y, gated on `signal_conf >= 0.55` (added 2026-06-21; previously had no confidence gate at all) |
-| `red_light_violation` | 1,000 | High | Tracker: `check_red_light()` crossing detection. Image-only: `_check_red_light_static()` — position + signal state, gated on `signal_conf >= 0.65` |
-| `illegal_parking` | 500 | Low | Tracker: `check_illegal_parking()`, 300s stationary threshold + zone check. Image-only: `_check_illegal_parking_static()` zone-only (no timer) |
+| `wrong_side_driving` | 5,000 | Critical | Tracker: `check_wrong_side()` — heading-angle threshold (`WRONG_SIDE_ANGLE_THRESHOLD_DEG = 100`) against the calibrated `traffic_direction`, plus a 2-consecutive-frame persistence counter (`WRONG_SIDE_STRIKES_REQUIRED`) before confirming (fixed 2026-06-23 — previously a raw velocity dot-product threshold, which a vehicle merely turning or changing lanes could trip on a single noisy frame). Image-only: `_check_wrong_side_static()` — position-only proxy (no heading in a still frame) against the per-camera `wrong_side_lane` setting ("left"/"right", default "left"); only fires at moderate conf (0.60), treat as Tier-2 review material, not auto-challan |
+| `stop_line_violation` | 500 | Medium | Tracker: `check_stop_line()` over N-frame history, now gated on `signal_conf >= 0.60` (fixed 2026-06-23 — previously had **no** confidence floor at all, so a ~0.4-0.5-confidence signal misdetection, e.g. a stray red taillight, was enough to cite a vehicle with no real traffic light nearby). Image-only: `_check_stop_line_static()` — position vs. stop-line-y, same `signal_conf >= 0.60` floor |
+| `red_light_violation` | 1,000 | High | Tracker: `check_red_light()` — now requires an actual crossing (vehicle was on the legal side earlier in the same window, not just present past the line at some point), gated on `signal_conf >= 0.60` (crossing requirement added 2026-06-23 — previously "anywhere past the line in the last N frames" wrongly classified an already-parked vehicle as having run the light once the signal turned red). Image-only: `_check_red_light_static()` — position + signal state, gated on `signal_conf >= 0.65` |
+| `illegal_parking` | 500 | Low | Tracker: `check_illegal_parking()`, 300s stationary threshold + zone check, duration now anchored to a frame counter (`self._frame_counter`) scaled by `self.fps` instead of `time.monotonic()` (fixed 2026-06-23 — wall-clock time has nothing to do with video time for batch/offline jobs, where frames can process faster or slower than real time). Image-only: `_check_illegal_parking_static()` zone-only (no timer) |
 | `phone_use_while_driving` | 5,000 | High | `check_phone()` — COCO `cell_phone` class overlapping driver region |
 | `drowsy_driving` | 2,000 | Critical | `ml/pipeline/driver_state.py` — MediaPipe FaceMesh eye/yawn analysis |
 
 **Note**: wrong-side, stop-line, red-light, and illegal-parking checks were originally tracker-only (video). Image-only static fallbacks were added to `check_all()` so single-frame uploads through `/jobs/upload` still produce all 7 ps.txt-required violation types, not just helmet/seatbelt/triple-riding/phone.
+
+**Known limitation (not yet fixed)**: ByteTrack's track-ID continuity is unreliable in heavily congested/occluded scenes — observed both as a single bad frame resetting `check_illegal_parking()`'s accumulated timer (an ID briefly reassigned to an unrelated vehicle) and as a sign flip in `check_wrong_side()`'s velocity for the same physical vehicle across an ID switch. Tight, carefully-bounded zone calibration reduces the blast radius but doesn't eliminate it.
 
 ---
 

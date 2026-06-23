@@ -45,8 +45,78 @@ router = APIRouter(prefix="/jobs")
 # same, creating two independent model instances. Both now share one registry.
 
 from ..services.ml_registry import get_ml_registry
-from ..services.calibration_service import CalibrationService
+from ..services.calibration_service import CalibrationService, _DEFAULTS
 from ..services.challan_service import ChallanService
+
+# ---------------------------------------------------------------------------
+# Module-level ML accessor shims — delegate lazily to the shared singleton.
+# These replace the old module-level globals (ml_detector, ml_ocr, …) that
+# were stripped during the registry refactor but are still referenced by the
+# _classify_and_package / _run_ml_on_* helpers below.
+# ---------------------------------------------------------------------------
+
+class _MLShim:
+    """Attribute-proxy that forwards reads to the shared MLRegistry singleton.
+
+    Using a proxy instead of bare assignments at import time means the
+    registry is only resolved at first *use* — safely after lifespan startup
+    has had a chance to initialise all model weights.
+    """
+    def __getattr__(self, name: str):
+        reg = get_ml_registry()
+        attr_map = {
+            "preprocessor": reg.preprocessor,
+            "detector":     reg.detector,
+            "ocr":          reg.ocr,
+            "classifier":   reg.classifier,
+            "driver_state": reg.driver_state,
+        }
+        if name in attr_map:
+            obj = attr_map[name]
+            if obj is None:
+                raise RuntimeError(
+                    f"ML component '{name}' is not available — registry not loaded."
+                )
+            return obj
+        raise AttributeError(f"_MLShim has no attribute '{name}'")
+
+_ml = _MLShim()
+
+# Backward-compatible aliases used by helper functions below
+def _get_ml_preprocessor():  return get_ml_registry().preprocessor
+def _get_ml_detector():       return get_ml_registry().detector
+def _get_ml_ocr():            return get_ml_registry().ocr
+def _get_ml_classifier():     return get_ml_registry().classifier
+def _get_ml_driver_state():   return get_ml_registry().driver_state
+
+# True shim objects so existing code like `ml_detector.detect(…)` works
+class _ComponentProxy:
+    def __init__(self, getter): self._getter = getter
+    def __getattr__(self, name): return getattr(self._getter(), name)
+
+ml_preprocessor = _ComponentProxy(_get_ml_preprocessor)
+ml_detector     = _ComponentProxy(_get_ml_detector)
+ml_ocr          = _ComponentProxy(_get_ml_ocr)
+ml_classifier   = _ComponentProxy(_get_ml_classifier)
+ml_driver_state = _ComponentProxy(_get_ml_driver_state)
+
+# Boolean alias: True when the registry loaded all components
+@property
+def _ml_available_prop(): return get_ml_registry().available  # noqa: not used as a prop directly
+
+def _ml_available_check() -> bool:
+    return get_ml_registry().available
+
+# `ml_available` used in guard clauses like `if not _ensure_ml() or not ml_available`
+# Make it truthy/falsy by delegating through a callable wrapper
+class _BoolProxy:
+    def __bool__(self): return get_ml_registry().available
+    def __repr__(self): return repr(get_ml_registry().available)
+
+ml_available = _BoolProxy()
+
+# Default calibration fallback constant
+_DEFAULT_CALIBRATION: dict = {**_DEFAULTS, "calibrated": False}
 
 
 ml_available = False
@@ -73,7 +143,6 @@ def _ensure_ml() -> bool:
 async def _resolve_calibration(camera_id: Optional[str]) -> dict:
     """Look up per-camera calibration; fall back to defaults when unknown."""
     if not camera_id:
-        from ..services.calibration_service import _DEFAULTS
         return {**_DEFAULTS, "calibrated": False}
     async with AsyncSessionLocal() as session:
         svc = CalibrationService(session)
@@ -89,6 +158,9 @@ def _apply_calibration(calibration: dict) -> None:
     ml.classifier.parking_zones     = calibration["parking_zones"]
     ml.classifier.traffic_direction = calibration["traffic_direction"]
     ml.classifier.wrong_side_zone   = calibration["wrong_side_zone"]
+    # New camera/video source — clear the signal-smoothing buffer so it
+    # doesn't carry over readings from whatever was processed before this.
+    ml.classifier.reset_signal_smoothing()
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +795,10 @@ def _run_ml_on_video(
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         sample_interval = max(1, round(fps / VIDEO_SAMPLE_FPS))
+        # The tracker only sees one update per sampled frame, so the rate
+        # that matters for the classifier's crossing/velocity windows is the
+        # sampling rate (VIDEO_SAMPLE_FPS), not the source video's native fps.
+        ml_classifier.fps = VIDEO_SAMPLE_FPS
 
         frame_idx = 0
         while frames_processed < MAX_VIDEO_FRAMES:
@@ -813,80 +889,92 @@ async def run_job_pipeline(
     if batch_files or file_bytes is not None:
         loop = asyncio.get_event_loop()
 
-        if source_type.lower() == "batch":
-            await _update_job(progress=20)
-            violations_created = await loop.run_in_executor(
-                None, _run_ml_on_batch, batch_files, job_id, calibration
+        try:
+            if source_type.lower() == "batch":
+                await _update_job(progress=20)
+                violations_created = await loop.run_in_executor(
+                    None, _run_ml_on_batch, batch_files, job_id, calibration
+                )
+                frames_processed = len(batch_files)
+            elif source_type.lower() == "video":
+                await _update_job(progress=20)
+                violations_created, frames_processed = await loop.run_in_executor(
+                    None, _run_ml_on_video, file_bytes, job_id, filename, calibration
+                )
+            else:
+                # Decode image
+                nparr = np.frombuffer(file_bytes, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if img is None:
+                    logger.error("Job %s: Failed to decode image bytes", job_id)
+                    await _update_job(status="Failed", progress=0)
+                    return
+
+                await _update_job(progress=30)
+
+                # Run ML inference in thread pool to avoid blocking event loop
+                violations_created = await loop.run_in_executor(
+                    None, _run_ml_on_image, img, job_id, filename, False, calibration
+                )
+                frames_processed = 1
+
+            await _update_job(progress=70)
+
+            # Save only genuine violations to DB — compliant images contribute
+            # nothing to the violation registry. One image's record carries every
+            # violation found in it (e.g. helmet + triple riding on the same
+            # frame) and becomes ONE clubbed citation row — not one row per
+            # violation — since an officer reviews the whole image at once, not
+            # each bounding box in isolation. save_violation() rolls the list up
+            # into one summary (joined types, total fine, worst severity).
+            violation_count = 0
+            for v_data in violations_created:
+                record = v_data["record"]
+                record_violations = record.get("violations", [])
+                if not record_violations:
+                    continue
+                try:
+                    async with AsyncSessionLocal() as session:
+                        await save_violation(session, record)
+                        if v_data["plate_text"] and v_data["plate_text"] != "UNCLEAR":
+                            for v in record_violations:
+                                await upsert_vehicle(session, v_data["plate_text"], v["type"])
+                        violation_count += len(record_violations)
+                except Exception as e:
+                    logger.error("Failed to save violation record: %s", e)
+
+            # Full, uncollapsed real-pipeline breakdown for every item processed —
+            # this is what the Evidence page reads via GET /jobs/{job_id}/result,
+            # independent of the (intentionally lossier) violations table above.
+            result_summary = json.dumps(
+                {"records": [v_data["record"] for v_data in violations_created]},
+                default=str,
             )
-            frames_processed = len(batch_files)
-        elif source_type.lower() == "video":
-            await _update_job(progress=20)
-            violations_created, frames_processed = await loop.run_in_executor(
-                None, _run_ml_on_video, file_bytes, job_id, filename, calibration
+
+            elapsed = max(1, int((datetime.utcnow() - start).total_seconds()))
+            await _update_job(
+                status="Completed",
+                progress=100,
+                duration=elapsed,
+                frames_processed=frames_processed,
+                violations_found=violation_count,
+                result_summary=result_summary,
             )
-        else:
-            # Decode image
-            nparr = np.frombuffer(file_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if img is None:
-                logger.error("Job %s: Failed to decode image bytes", job_id)
-                await _update_job(status="Failed", progress=0)
-                return
-
-            await _update_job(progress=30)
-
-            # Run ML inference in thread pool to avoid blocking event loop
-            violations_created = await loop.run_in_executor(
-                None, _run_ml_on_image, img, job_id, filename, False, calibration
+            logger.info(
+                "Job %s completed: %d violations found in %s (%d frames processed)",
+                job_id, violation_count, filename, frames_processed,
             )
-            frames_processed = 1
 
-        await _update_job(progress=70)
+        except Exception as pipeline_exc:
+            # Catch-all safety net: any crash (NameError, RuntimeError, etc.)
+            # must mark the job Failed — never leave it stuck at 20%/Processing.
+            elapsed = max(1, int((datetime.utcnow() - start).total_seconds()))
+            logger.error(
+                "Job %s pipeline FAILED after %ds: %s",
+                job_id, elapsed, pipeline_exc, exc_info=True,
+            )
+            await _update_job(status="Failed", progress=0, duration=elapsed)
 
-        # Save only genuine violations to DB — compliant images contribute
-        # nothing to the violation registry. One image's record carries every
-        # violation found in it (e.g. helmet + triple riding on the same
-        # frame) and becomes ONE clubbed citation row — not one row per
-        # violation — since an officer reviews the whole image at once, not
-        # each bounding box in isolation. save_violation() rolls the list up
-        # into one summary (joined types, total fine, worst severity).
-        violation_count = 0
-        for v_data in violations_created:
-            record = v_data["record"]
-            record_violations = record.get("violations", [])
-            if not record_violations:
-                continue
-            try:
-                async with AsyncSessionLocal() as session:
-                    await save_violation(session, record)
-                    if v_data["plate_text"] and v_data["plate_text"] != "UNCLEAR":
-                        for v in record_violations:
-                            await upsert_vehicle(session, v_data["plate_text"], v["type"])
-                    violation_count += len(record_violations)
-            except Exception as e:
-                logger.error("Failed to save violation record: %s", e)
-
-        # Full, uncollapsed real-pipeline breakdown for every item processed —
-        # this is what the Evidence page reads via GET /jobs/{job_id}/result,
-        # independent of the (intentionally lossier) violations table above.
-        result_summary = json.dumps(
-            {"records": [v_data["record"] for v_data in violations_created]},
-            default=str,
-        )
-
-        elapsed = max(1, int((datetime.utcnow() - start).total_seconds()))
-        await _update_job(
-            status="Completed",
-            progress=100,
-            duration=elapsed,
-            frames_processed=frames_processed,
-            violations_found=violation_count,
-            result_summary=result_summary,
-        )
-        logger.info(
-            "Job %s completed: %d violations found in %s (%d frames processed)",
-            job_id, violation_count, filename, frames_processed,
-        )
     else:
         # No file uploaded — simulate basic progress (no real inference)
         await asyncio.sleep(2)

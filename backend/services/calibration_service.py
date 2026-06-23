@@ -85,4 +85,9 @@ class CalibrationService:
         classifier.parking_zones     = calib["parking_zones"]
         classifier.traffic_direction = calib["traffic_direction"]
         classifier.wrong_side_zone   = calib["wrong_side_zone"]
+        # New camera/video source — the signal-smoothing buffer holds
+        # readings from whatever was processed before this call and must
+        # not bleed across sources sharing this classifier instance.
+        if hasattr(classifier, "reset_signal_smoothing"):
+            classifier.reset_signal_smoothing()
         return calib["calibrated"]

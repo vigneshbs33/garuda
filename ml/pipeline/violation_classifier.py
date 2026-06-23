@@ -18,11 +18,12 @@ Optional[ViolationResult]. None = no violation found.
 from __future__ import annotations
 
 import logging
-import time
+import math
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -363,11 +364,22 @@ class AIHelmetViolationDetector:
         self,
         image: np.ndarray,
         vehicle: "Detection",
+        riders: Optional[List["Detection"]] = None,
     ) -> Tuple[bool, float, int]:
         """
         Detect helmet violation on a 2-wheeler.
         Runs best.pt on the full image (once per frame, cached) then associates
         'head' detections with the vehicle bounding box.
+
+        riders : Person detections already associated with this vehicle (see
+                  ViolationClassifier.associate_riders_with_vehicles). Used
+                  only for the crop-based fallback head region below — a
+                  motorcycle's own bbox is frequently tight around the bike
+                  and lower body and does not extend up to an upright rider's
+                  head, especially at distance/odd angles, which silently
+                  breaks a "top 45% of vehicle bbox" head crop. A rider's own
+                  person bbox reliably includes their head; prefer it when
+                  available.
 
         Returns (violation_found, confidence, rider_count).
         rider_count is used for triple-riding detection.
@@ -377,10 +389,16 @@ class AIHelmetViolationDetector:
 
         x1, y1, x2, y2 = map(int, vehicle.bbox)
 
-        if self._model is None:
+        def _fallback_head_crop() -> np.ndarray:
+            if riders:
+                rx1, ry1, rx2, ry2 = map(int, riders[0].bbox)
+                rh = int((ry2 - ry1) * 0.45)
+                return image[ry1: ry1 + rh, rx1:rx2]
             head_h = int((y2 - y1) * 0.45)
-            head_crop = image[y1 : y1 + head_h, x1:x2]
-            has_helmet, conf = self._fallback.classify(head_crop)
+            return image[y1: y1 + head_h, x1:x2]
+
+        if self._model is None:
+            has_helmet, conf = self._fallback.classify(_fallback_head_crop())
             return not has_helmet, conf, 1
 
         try:
@@ -401,19 +419,25 @@ class AIHelmetViolationDetector:
                     return False, best_conf, max(rider_count, 1)
                 return True, best_conf, max(rider_count, 1)
 
-            if rider_count == 0:
-                # No head/helmet found near vehicle — use fallback
-                head_h = int((y2 - y1) * 0.45)
-                head_crop = image[y1 : y1 + head_h, x1:x2]
-                has_helmet, fb_conf = self._fallback.classify(head_crop)
-                return not has_helmet, fb_conf, 1
+            if associated_helmets:
+                best_conf = max(c for _, c in associated_helmets)
+                if best_conf < self._MIN_VIOLATION_CONF:
+                    # Only evidence is a marginal "wearing helmet" detection —
+                    # equally too unsure to call this compliant outright (the
+                    # asymmetry of trusting a weak "helmet" read while
+                    # requiring 0.40+ for a "head" read let a 0.19-confidence
+                    # misclassification silently clear an actually-bare-headed
+                    # rider). Defer to the crop classifier as a tie-breaker.
+                    has_helmet, fb_conf = self._fallback.classify(_fallback_head_crop())
+                    return not has_helmet, fb_conf, max(rider_count, 1)
+                return False, best_conf, rider_count
 
-            return False, 0.0, rider_count
+            # No head/helmet found near vehicle at all — use fallback
+            has_helmet, fb_conf = self._fallback.classify(_fallback_head_crop())
+            return not has_helmet, fb_conf, 1
         except Exception as e:
             logger.warning("Helmet inference failed (%s), using fallback", e)
-            head_h = int((y2 - y1) * 0.45)
-            head_crop = image[y1 : y1 + head_h, x1:x2]
-            has_helmet, conf = self._fallback.classify(head_crop)
+            has_helmet, conf = self._fallback.classify(_fallback_head_crop())
             return not has_helmet, conf, 1
 
 
@@ -636,6 +660,11 @@ class ViolationClassifier:
     # plate OCR confidence, which is a separate, unrelated signal.
     MIN_VIOLATION_CONFIDENCE = 0.40
 
+    # How many consecutive signal-detector readings to debounce over before
+    # trusting a colour change (majority vote) — absorbs single-frame
+    # misclassifications (glare, motion blur, brief occlusion).
+    SIGNAL_SMOOTHING_WINDOW = 5
+
     def __init__(
         self,
         stop_line_y: int = 400,
@@ -644,6 +673,7 @@ class ViolationClassifier:
         wrong_side_zone: Optional[List[List[int]]] = None,
         helmet_weights_path: Optional[str] = None,
         wrong_side_lane: str = "left",
+        fps: float = 30.0,
     ) -> None:
         self.stop_line_y = stop_line_y
         self.parking_zones: List[List[int]] = parking_zones or []
@@ -653,9 +683,100 @@ class ViolationClassifier:
         self.helmet_clf = HelmetClassifier(helmet_weights_path)
         self.ai_helmet = AIHelmetViolationDetector(helmet_weights_path)
         self.signal_det = MLSignalStateDetector()
-        self._parked_since: Dict[int, float] = {}
+        # _parked_since stores a *frame count* (self._frame_counter at the
+        # moment a track first started parking), not a wall-clock timestamp
+        # — see check_illegal_parking() for why.
+        self._parked_since: Dict[int, int] = {}
+        self._wrong_side_strikes: Dict[int, int] = {}
+        self._frame_counter: int = 0
         self._seatbelt_model = None
         self._load_seatbelt_model()
+
+        # fps is the rate at which tracker.update() is actually called for
+        # the video this classifier is currently processing (the sampled
+        # rate, not necessarily the source file's native fps — e.g. jobs.py
+        # samples video at 1fps regardless of the source's frame rate). It's
+        # a plain mutable attribute, like stop_line_y, so callers can
+        # re-point it per job/camera without reloading models.
+        self.fps = fps if fps and fps > 0 else 30.0
+        self._signal_history: Deque[Tuple[str, float]] = deque(maxlen=self.SIGNAL_SMOOTHING_WINDOW)
+        self._confirmed_signal_state = "unknown"
+        # Frames since a light was last actually detected present. Used to
+        # treat the debounce buffer as stale after a gap — otherwise two
+        # isolated false-positive detections far apart in time (e.g. a stray
+        # red taillight misclassified as a signal at t=0s and another at
+        # t=11s, with nothing detected in between) would sit in the same
+        # buffer and "agree" with each other despite having nothing to do
+        # with one another.
+        self._frames_since_light_seen = 0
+
+    def _frames_for_seconds(self, seconds: float) -> int:
+        """Convert a wall-clock duration to a frame count at self.fps."""
+        return max(2, round(self.fps * seconds))
+
+    def reset_signal_smoothing(self) -> None:
+        """Clear all per-track-id state — call this whenever the classifier
+        switches to a different camera/video, since this state (signal
+        debounce buffer, parking timers, wrong-side strike counters, frame
+        counter) holds data from whatever source it was last fed and is
+        keyed by track_id, which is not unique across unrelated jobs/cameras
+        sharing this singleton classifier instance."""
+        self._signal_history.clear()
+        self._confirmed_signal_state = "unknown"
+        self._frames_since_light_seen = 0
+        self._parked_since.clear()
+        self._wrong_side_strikes.clear()
+        self._frame_counter = 0
+
+    def _smooth_signal_state(
+        self, state: str, conf: float, light_detected: bool
+    ) -> Tuple[str, float, bool]:
+        """
+        Majority-vote the last SIGNAL_SMOOTHING_WINDOW signal readings before
+        trusting a colour change, so a single misclassified frame (glare,
+        motion blur, brief occlusion) can't flip red_light/stop_line checks
+        on or off by itself.
+
+        Two things make this more than a plain majority vote, both found by
+        testing against real footage with no traffic light at all in frame:
+        1. Non-detections aren't appended to the buffer at all (light wasn't
+           there to vote on), so the buffer can go a long time holding only
+           one or two stale readings — confirming off a single sample, or
+           letting two detections from many seconds apart "agree" with each
+           other, are both wrong. Fixed by requiring >= 2 samples to confirm,
+           and discarding the buffer once it's gone stale (no detection for
+           longer than the window).
+        """
+        if not light_detected:
+            self._frames_since_light_seen += 1
+            # No traffic light confirmed present this frame — don't let an
+            # "unknown" reading dilute the debounce buffer; just pass through
+            # so downstream gating (which already requires light_detected)
+            # behaves the same as before.
+            return state, conf, light_detected
+
+        if self._frames_since_light_seen > self.SIGNAL_SMOOTHING_WINDOW:
+            # Long gap since anything was last detected — whatever's in the
+            # buffer is from an unrelated earlier moment, not a continuation
+            # of the same light. Start the vote over.
+            self._signal_history.clear()
+        self._frames_since_light_seen = 0
+
+        self._signal_history.append((state, conf))
+        counts: Dict[str, int] = {}
+        for s, _ in self._signal_history:
+            counts[s] = counts.get(s, 0) + 1
+        majority_state, majority_count = max(counts.items(), key=lambda kv: kv[1])
+        # Require at least 2 agreeing samples — a lone detected frame (the
+        # only kind that can dominate a near-empty buffer, since misses
+        # don't get a vote) is exactly the case that needs damping, not
+        # trusting outright.
+        if majority_count >= 2 and majority_count * 2 > len(self._signal_history):
+            self._confirmed_signal_state = majority_state
+
+        agree_confs = [c for s, c in self._signal_history if s == self._confirmed_signal_state]
+        avg_conf = sum(agree_confs) / len(agree_confs) if agree_confs else conf
+        return self._confirmed_signal_state, avg_conf, light_detected
 
     def _load_seatbelt_model(self) -> None:
         try:
@@ -824,16 +945,25 @@ class ViolationClassifier:
         light_detected: bool = True,
     ) -> Optional[ViolationResult]:
         """
-        Check if vehicle crossed stop line while signal is red.
+        Check if vehicle crossed the stop line, under red, within the last
+        ~0.5s of track history.
 
         Sequence enforced: (1) a traffic light must actually be detected in
-        frame, (2) it must be red, (3) the vehicle's track history must show
-        it past the calibrated stop line. Each step gates the next — no
-        guessing a red light into existence from track history alone.
+        frame, (2) it must be red, (3) the vehicle must currently be past the
+        calibrated stop line, AND (4) its track history must show it was
+        still on the legal side earlier in that same window. Each step gates
+        the next — no guessing a red light into existence from track history
+        alone.
+
+        Requiring (4) is what distinguishes "ran the red light just now" from
+        "was already parked past the line before the light ever turned red"
+        — the latter is a STOP_LINE_VIOLATION, not this. Without it, a
+        vehicle stationary past the line for longer than the lookback window
+        would be wrongly classified as having just run the light.
 
         Parameters
         ----------
-        track_bboxes   : Last N bounding boxes from tracker history
+        track_bboxes   : Recent bounding boxes from tracker history, oldest first
         signal_state   : Current signal colour
         signal_conf    : Confidence of signal detection
         latest_bbox    : Most recent bbox for the violation record
@@ -848,20 +978,26 @@ class ViolationClassifier:
             return None
         if signal_conf < 0.60:
             return None
+        if not latest_bbox or latest_bbox[3] <= self.stop_line_y:
+            return None  # not currently past the line — nothing to flag
 
-        for bbox in track_bboxes[-15:]:
-            if bbox[3] > self.stop_line_y:   # y2 > stop line
-                return ViolationResult.create(
-                    ViolationType.RED_LIGHT_VIOLATION,
-                    confidence=min(0.97, signal_conf * 0.98),
-                    bbox=latest_bbox or bbox,
-                    metadata={
-                        "signal_state": "red",
-                        "stop_line_y": self.stop_line_y,
-                        "signal_confidence": round(signal_conf, 3),
-                    },
-                )
-        return None
+        window = track_bboxes[-self._frames_for_seconds(0.5):]
+        was_on_legal_side = any(bbox[3] <= self.stop_line_y for bbox in window[:-1])
+        if not was_on_legal_side:
+            # Already past the line for the entire lookback window — this is
+            # encroachment/parking over the line, not a crossing event.
+            return None
+
+        return ViolationResult.create(
+            ViolationType.RED_LIGHT_VIOLATION,
+            confidence=min(0.97, signal_conf * 0.98),
+            bbox=latest_bbox,
+            metadata={
+                "signal_state": "red",
+                "stop_line_y": self.stop_line_y,
+                "signal_confidence": round(signal_conf, 3),
+            },
+        )
 
     # ------------------------------------------------------------------
     # 4. Stop-line violation (stationary over line)
@@ -873,16 +1009,23 @@ class ViolationClassifier:
         signal_state: str,
         latest_bbox: List[float],
         light_detected: bool = True,
+        signal_conf: float = 1.0,
     ) -> Optional[ViolationResult]:
         """
         Detect vehicle stopped over the stop line (not crossing, just encroaching).
 
         Same sequence as check_red_light: a traffic light must be confirmed
-        present before its colour means anything.
+        present before its colour means anything, AND that reading must clear
+        the same 0.60 confidence floor check_red_light uses — without it, a
+        marginal signal-detector misfire (e.g. a stray red taillight or sign
+        classified as a "red light" at ~0.4-0.5 confidence) was enough to
+        cite a stopped vehicle that's nowhere near an actual traffic light.
         """
         if not light_detected:
             return None
         if signal_state.lower() not in ("red", "yellow"):
+            return None
+        if signal_conf < 0.60:
             return None
 
         if not track_bboxes or not latest_bbox:
@@ -892,9 +1035,10 @@ class ViolationClassifier:
         if latest_bbox[3] <= self.stop_line_y:
             return None
 
-        # Check vehicle is stationary (small velocity)
-        if len(track_bboxes) >= 5:
-            prev = track_bboxes[-5]
+        # Check vehicle is stationary (small velocity over ~1/6s, scaled to fps)
+        lookback = self._frames_for_seconds(1 / 6)
+        if len(track_bboxes) >= lookback:
+            prev = track_bboxes[-lookback]
             velocity_y = abs(prev[3] - latest_bbox[3])
             if velocity_y > 8:
                 return None  # Still moving
@@ -919,19 +1063,35 @@ class ViolationClassifier:
         "left":  (-1.0, 0.0),
     }
 
+    # A vehicle heading more than this many degrees away from the legal
+    # direction is "backward", not just turning/lane-changing. Patents and
+    # papers on wrong-way detection commonly use an ~80-90 degree
+    # turnaround threshold so an ordinary turn (which briefly points well
+    # off-axis but not backward) doesn't get flagged.
+    WRONG_SIDE_ANGLE_THRESHOLD_DEG = 100.0
+    # Require the heading to be backward for this many consecutive frames
+    # before confirming — absorbs single-frame tracker jitter, the same
+    # debounce idea used for signal-state smoothing.
+    WRONG_SIDE_STRIKES_REQUIRED = 2
+
     def check_wrong_side(
         self,
         velocity: Tuple[float, float],
         latest_bbox: List[float],
+        track_id: Optional[int] = None,
         direction: Optional[str] = None,
     ) -> Optional[ViolationResult]:
         """
-        Detect wrong-side driving: a vehicle moving against this camera's
-        calibrated legal direction of travel inside the wrong_side_zone.
+        Detect wrong-side driving: a vehicle heading backward relative to
+        this camera's calibrated legal direction of travel, inside the
+        wrong_side_zone, sustained for WRONG_SIDE_STRIKES_REQUIRED frames.
 
         Parameters
         ----------
         velocity  : (vx, vy) from tracker
+        track_id  : Tracker ID, used to persist a per-vehicle strike counter
+                    across calls so a single noisy frame can't trigger a
+                    violation. None disables persistence (always strike 1).
         direction : "down"|"up"|"left"|"right" — legal direction of travel as
                     seen by this camera. Falls back to self.traffic_direction
                     (set per-camera by the caller) when not given explicitly.
@@ -947,6 +1107,8 @@ class ViolationClassifier:
             for zx1, zy1, zx2, zy2 in self.wrong_side_zone
         )
         if not in_zone:
+            if track_id is not None:
+                self._wrong_side_strikes.pop(track_id, None)
             return None
 
         direction = direction if direction in self.VALID_DIRECTIONS else self.traffic_direction
@@ -954,19 +1116,33 @@ class ViolationClassifier:
         speed = (vx ** 2 + vy ** 2) ** 0.5
 
         if speed < 3.0:  # Too slow / stationary
+            if track_id is not None:
+                self._wrong_side_strikes.pop(track_id, None)
             return None
 
         dx, dy = self._DIRECTION_VECTORS[direction]
-        # Velocity component along the legal direction; negative = moving
-        # against it (generalizes the old "vy < -5 when traffic flows down"
-        # check to all 4 cardinal directions via dot product).
-        along_expected = vx * dx + vy * dy
+        # Angle between heading and the legal direction — distinguishes
+        # "driving backward" (~180 degrees off) from a turn or lane change
+        # (which points off-axis but not backward), unlike a bare dot
+        # product, which conflates angle and speed.
+        cos_theta = max(-1.0, min(1.0, (vx * dx + vy * dy) / speed))
+        angle_deg = math.degrees(math.acos(cos_theta))
 
-        if along_expected < -5:
-            conf = min(0.90, 0.55 + speed / 80)
-            return ViolationResult.create(
-                ViolationType.WRONG_SIDE_DRIVING,
-                confidence=conf,
+        if angle_deg < self.WRONG_SIDE_ANGLE_THRESHOLD_DEG:
+            if track_id is not None:
+                self._wrong_side_strikes.pop(track_id, None)
+            return None
+
+        if track_id is not None:
+            strikes = self._wrong_side_strikes.get(track_id, 0) + 1
+            self._wrong_side_strikes[track_id] = strikes
+            if strikes < self.WRONG_SIDE_STRIKES_REQUIRED:
+                return None
+
+        conf = min(0.90, 0.55 + speed / 80)
+        return ViolationResult.create(
+            ViolationType.WRONG_SIDE_DRIVING,
+            confidence=conf,
                 bbox=latest_bbox,
                 metadata={
                     "velocity_vx": round(vx, 2),
@@ -989,19 +1165,26 @@ class ViolationClassifier:
         parking_threshold_sec: float = 300.0,
     ) -> Optional[ViolationResult]:
         """
-        Detect vehicle parked in a no-parking zone for > 5 minutes.
+        Detect vehicle parked in a no-parking zone for > 5 minutes of
+        *video* time.
+
+        Duration is measured in frames elapsed (self._frame_counter) scaled
+        by self.fps, not wall-clock time — check_all() is called once per
+        processed frame regardless of how fast the host machine actually
+        runs that loop (batch inference can blow through a 5-minute video in
+        a few seconds, or lag behind on a slow machine), so a wall-clock
+        timer would measure processing speed instead of video time.
         """
         if not in_no_parking_zone or not is_stationary:
             if track_id in self._parked_since:
                 del self._parked_since[track_id]
             return None
 
-        now = time.monotonic()
         if track_id not in self._parked_since:
-            self._parked_since[track_id] = now
+            self._parked_since[track_id] = self._frame_counter
             return None
 
-        duration = now - self._parked_since[track_id]
+        duration = (self._frame_counter - self._parked_since[track_id]) / self.fps
         if duration >= parking_threshold_sec:
             return ViolationResult.create(
                 ViolationType.ILLEGAL_PARKING,
@@ -1209,22 +1392,40 @@ class ViolationClassifier:
         signal_state, signal_conf, light_detected = ("unknown", 0.0, False)
         phones = phone_detections or []
 
+        if enable_motion_violations:
+            # One tick per processed video frame — anchors check_illegal_parking's
+            # duration measurement to video time instead of wall-clock time.
+            self._frame_counter += 1
+
         if signal_frame is not None:
-            signal_state, signal_conf, light_detected = self.signal_det.detect_with_presence(signal_frame, signal_bbox)
+            raw_state, raw_conf, light_detected = self.signal_det.detect_with_presence(signal_frame, signal_bbox)
+            signal_state, signal_conf, light_detected = self._smooth_signal_state(raw_state, raw_conf, light_detected)
+
+        # Rider association must happen before the helmet batch below — the
+        # helmet detector's crop-based fallback needs each vehicle's actual
+        # rider bbox (reliably includes the head) rather than guessing from
+        # the vehicle's own bbox (often tight around just the bike).
+        two_wheelers = [v for v in vehicles if v.is_two_wheeler]
+        rider_map = self.associate_riders_with_vehicles(two_wheelers, persons)
 
         # Pre-compute helmet results for all two-wheelers in batch
-        two_wheelers = [v for v in vehicles if v.is_two_wheeler]
         helmet_results = {}
         if two_wheelers:
             if self.ai_helmet._model is None:
                 # Fallback crop-based path: batch them!
                 head_crops = []
                 for vehicle in two_wheelers:
-                    x1, y1, x2, y2 = map(int, vehicle.bbox)
-                    head_h = int((y2 - y1) * 0.45)
-                    head_crop = image[y1 : y1 + head_h, x1:x2]
+                    riders = rider_map.get(id(vehicle))
+                    if riders:
+                        rx1, ry1, rx2, ry2 = map(int, riders[0].bbox)
+                        rh = int((ry2 - ry1) * 0.45)
+                        head_crop = image[ry1: ry1 + rh, rx1:rx2]
+                    else:
+                        x1, y1, x2, y2 = map(int, vehicle.bbox)
+                        head_h = int((y2 - y1) * 0.45)
+                        head_crop = image[y1 : y1 + head_h, x1:x2]
                     head_crops.append(head_crop)
-                
+
                 batch_results = self.helmet_clf.classify_batch(head_crops)
                 for vehicle, (has_helmet, conf) in zip(two_wheelers, batch_results):
                     # For fallback crop path, rider_count defaults to 1
@@ -1234,10 +1435,9 @@ class ViolationClassifier:
                 # Pre-run full image prediction once to cache results
                 self.ai_helmet._run_full_image(image)
                 for vehicle in two_wheelers:
-                    helmet_results[id(vehicle)] = self.ai_helmet.detect(image, vehicle)
-
-        two_wheelers = [v for v in vehicles if v.is_two_wheeler]
-        rider_map = self.associate_riders_with_vehicles(two_wheelers, persons)
+                    helmet_results[id(vehicle)] = self.ai_helmet.detect(
+                        image, vehicle, riders=rider_map.get(id(vehicle))
+                    )
 
         for vehicle in vehicles:
             tid = vehicle.track_id
@@ -1274,7 +1474,10 @@ class ViolationClassifier:
             if enable_motion_violations:
                 if tid is not None and tracker_states and tid in tracker_states:
                     state = tracker_states[tid]
-                    history_bboxes = state.bboxes_in_window(20)
+                    # 1s of history is enough margin for the 0.5s red-light
+                    # crossing window and the stop-line velocity check below,
+                    # scaled to this classifier's actual sampling rate.
+                    history_bboxes = state.bboxes_in_window(self._frames_for_seconds(1.0))
                     vx, vy = state.velocity()
                     is_stat = state.is_stationary()
 
@@ -1284,11 +1487,11 @@ class ViolationClassifier:
                     if v:
                         results.append(v)
 
-                    v = self.check_stop_line(history_bboxes, signal_state, vehicle.bbox, light_detected)
+                    v = self.check_stop_line(history_bboxes, signal_state, vehicle.bbox, light_detected, signal_conf)
                     if v:
                         results.append(v)
 
-                    v = self.check_wrong_side((vx, vy), vehicle.bbox)
+                    v = self.check_wrong_side((vx, vy), vehicle.bbox, track_id=tid)
                     if v:
                         results.append(v)
 
@@ -1303,7 +1506,7 @@ class ViolationClassifier:
                     if v:
                         results.append(v)
 
-                    v = self._check_stop_line_static(vehicle.bbox, signal_state, light_detected)
+                    v = self._check_stop_line_static(vehicle.bbox, signal_state, light_detected, signal_conf)
                     if v:
                         results.append(v)
 
@@ -1359,11 +1562,14 @@ class ViolationClassifier:
         bbox: List[float],
         signal_state: str,
         light_detected: bool = True,
+        signal_conf: float = 1.0,
     ) -> Optional[ViolationResult]:
         """Stop-line: vehicle front past stop line while signal is red or yellow."""
         if not light_detected:
             return None
         if signal_state.lower() not in ("red", "yellow"):
+            return None
+        if signal_conf < 0.60:
             return None
         if bbox[3] <= self.stop_line_y:
             return None

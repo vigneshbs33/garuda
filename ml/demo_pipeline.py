@@ -319,6 +319,7 @@ def run_video(args) -> None:
         sys.exit(1)
 
     fps_target     = int(cap.get(cv2.CAP_PROP_FPS) or 30)
+    classifier.fps = fps_target  # every frame is processed here, no sampling
     frame_idx      = 0
     violations_total = 0
     fps_timer      = time.time()

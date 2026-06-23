@@ -615,6 +615,10 @@ async def ws_video_render(websocket: WebSocket):
         async with AsyncSessionLocal() as cal_session:
             calib_svc = CalibrationService(cal_session)
             calibrated = await calib_svc.apply(camera_id, ml.classifier)
+        # One tracker.update() per sampled output frame, so output_fps (not
+        # the source file's native fps) is the rate the crossing/velocity
+        # windows in check_red_light/check_stop_line need to be scaled to.
+        ml.classifier.fps = output_fps
 
         render_id = f"RENDER-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:6].upper()}"
         out_dir = "evidence/video"
