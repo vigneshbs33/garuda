@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: garuda_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Map the environment config
+      - ./.env:/app/.env
+      # Persist SQLite database file
+      - ./garuda.db:/app/garuda.db
+      # Persist violation evidence (images, crops, json records)
+      - ./evidence:/app/evidence
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///app/garuda.db
+    restart: always
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: garuda_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: always
