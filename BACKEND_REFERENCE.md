@@ -13,7 +13,7 @@ GARUDA is an **edge-native, automated traffic violation detection system**. A ca
 ## Status as of 2026-06-22 (post-refactor)
 
 - **Backend**: all endpoints below are real and working against a live SQLite DB — not mocked. 13 routers, 2 WebSocket endpoints, auth + RBAC, an audit trail, and a local LLM ops agent are all wired into `backend/main.py`.
-- **ML models**: 7 trained weight files are loaded and used in the live pipeline (not placeholders) — see the model table below for exact accuracy/mAP numbers pulled from their metrics JSON files.
+- **ML models**: 7 trained weight files are loaded and used in the live pipeline (not placeholders) — see the model table below. Numbers are reported only where a real metrics file or training run actually exists; models without one are marked as having no published/measured benchmark rather than given an invented figure.
 - **Live data path**: `POST /api/v1/jobs/upload` runs the real ML pipeline (preprocess → detect → classify → OCR) in a background task and writes violations straight to the DB. `python ml/demo_pipeline.py --input <image> --backend-url http://localhost:8000` is the CLI equivalent, useful for local debugging. `/debug/inject-violation` still exists for pure UI testing with fake data — don't confuse its output with real detections.
 - **Not implemented**: cross-camera vehicle re-identification; federated learning is wired (`ml/federated/`) but doesn't retrain from real edge data yet; there is **no standalone evaluation harness** that reports Accuracy/Precision/Recall/F1/mAP end-to-end across the whole pipeline — only per-model training metrics exist (see "ps.txt Coverage" below).
 - **2026-06-22 architectural refactor**:
@@ -217,9 +217,9 @@ ml/
 
 | File | Role | Verified metrics | Loaded by |
 |------|------|-------------------|-----------|
-| `helmet_best.pt` | **Primary** helmet check — AICity Track-5 9-class detector (helmet / head / person), runs on full image. Not used by triple-riding | mAP@0.5 = 0.648 | `AIHelmetViolationDetector` in `violation_classifier.py` |
-| `helmet_cnn.pt` | Fallback helmet classifier — binary CNN on head crop | accuracy=0.8744, precision=0.8675, recall=0.8182, **f1=0.8421** (n=215) | `HelmetClassifier` in `violation_classifier.py` |
-| `seatbelt_classifier.pt` | Windshield-ROI seatbelt classifier (YOLOv11s) | — | `ViolationClassifier._load_seatbelt_model` |
+| `helmet_best.pt` | **Primary** helmet check — 9-class detector (helmet / head / person), runs on full image. Not used by triple-riding | No published/measured benchmark for this exact checkpoint — confidence-thresholded at inference (conf=0.15), not evaluated against a held-out set | `AIHelmetViolationDetector` in `violation_classifier.py` |
+| `helmet_cnn.pt` | Fallback helmet classifier — binary CNN on head crop, trained in-house | accuracy=0.8744, precision=0.8675, recall=0.8182, **f1=0.8421** (n=215) | `HelmetClassifier` in `violation_classifier.py` |
+| `seatbelt_classifier.pt` | Windshield-ROI seatbelt classifier (YOLOv11s-cls) | 100% top-1 validation accuracy at epoch 8 (early-stopped at 18/40 epochs) — **caveat**: validation split was only 129 images with just 8 negative (no-seatbelt) samples, so this number is not a reliable estimate of real-world performance on an imbalanced/out-of-distribution feed | `ViolationClassifier._load_seatbelt_model` |
 | `traffic_lights_yolov8x.pt` | Traffic signal state detector (DTLD+LISA+BSTLD+HDTLR) | — | `MLSignalStateDetector` in `violation_classifier.py` |
 
 ### `ml/models/weights/ocr/`
@@ -658,7 +658,7 @@ audit_logs (
 | License plate detection + OCR | ✅ Done | 2-stage YOLO (Koushi+YasirFaiz) + OCR engine chain |
 | Evidence generation (annotated images + metadata) | ✅ Done | `ml/utils/evidence.py`, `ml/utils/visualizer.py` |
 | Analytics and reporting | ✅ Done (stats/trends/heatmap) | `/analytics/*` endpoints |
-| **Performance evaluation (Accuracy/Precision/Recall/F1/mAP)** | ⚠️ **Partial** — per-model training metrics exist (`helmet_metrics.json`, `plate_metrics.json`) but there is **no end-to-end evaluation script** that scores the full pipeline (detection→classification→OCR) against a labeled test set | Not yet built |
+| **Performance evaluation (Accuracy/Precision/Recall/F1/mAP)** | ⚠️ **Partial** — per-model training metrics exist (`helmet_metrics.json`, `plate_metrics.json`); still **no automated end-to-end evaluation script** that scores the full pipeline (detection→classification→OCR) against a labeled test set. Manual ground-truth-verified spot checks across 4 real Indian traffic photos (6 individually-verified vehicles): **5/6 correct (83%)** — 3/3 helmeted riders correctly cleared on one photo (conf 0.81/0.84/0.81), 1 bare-head no-helmet rider correctly caught on another (conf 0.63), 1 mixed-rider scooter (passenger unhelmeted) correctly caught (conf 0.66), and **1 real miss**: a bare-headed rider (wearing a face mask, no helmet) on a smaller/more distant bbox was wrongly cleared as compliant (conf 0.49) — recorded as a genuine false negative, not glossed over | Spot checks: `test/WhatsApp Image 2026-06-20 at 12.24.39/41/46 PM.jpeg`, `test/helmet/image.png`. Automated harness: not yet built |
 
 ---
 

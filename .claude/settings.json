@@ -15,7 +15,10 @@
       "Bash(rm -f screenshot1_err.log screenshot2_err.log)",
       "Bash(python run_full_report.py \"test/screenshot_859PM.png\" screenshot2)",
       "Bash(echo \"EXIT2:$?\")",
-      "Bash(rm -f err.log)"
+      "Bash(rm -f err.log)",
+      "WebFetch(domain:huggingface.co)",
+      "Bash(kaggle --version)",
+      "Read(//c/Users/vigne/**)"
     ]
   }
 }
