@@ -7,6 +7,15 @@ This README details the system architecture, file organization, installation/set
 
 ---
 
+### 📑 Navigation & Documentation Guides
+*   **[instructions_to_run.md](file:///Users/keshav/garuda/GARUDA/instructions_to_run.md)** — **Setup and Execution Manual** to launch the FastAPI Backend, Next.js Dashboard, and ML Ingestion Pipeline.
+*   **[description.md](file:///Users/keshav/garuda/GARUDA/description.md)** — **Comprehensive Project Description** detailing the problem, solution, model inventories, traceability matrix, and e-Challan dispute workflows.
+*   **[presentation.md](file:///Users/keshav/garuda/GARUDA/presentation.md)** — **Pitch Deck / Presentation Slides** with speaker notes and edge-hardware specs.
+*   **[free_deployment.md](file:///Users/keshav/garuda/GARUDA/free_deployment.md)** — **Cloud Deployment Guide** to host the entire stack online for free (Vercel, Render, Neon).
+*   **[BACKEND_REFERENCE.md](file:///Users/keshav/garuda/GARUDA/BACKEND_REFERENCE.md)** — **FastAPI Backend Developer's Reference** and API schemas.
+
+---
+
 ## 🏗️ System Architecture
 
 ```
@@ -256,7 +265,18 @@ The ML models must be placed in their respective subdirectories within `ml/model
 ---
 
 ## 📖 Further Reading
-For a complete documentation of REST endpoints, schemas, WebSocket parameters, database migrations, and detailed API responses, refer directly to [`BACKEND_REFERENCE.md`](BACKEND_REFERENCE.md).
+This README documents what's actually built and measured — not the pitch deck version.
+
+---
+
+### 📑 Navigation & Documentation Guides
+*   **[instructions_to_run.md](file:///Users/keshav/garuda/GARUDA/instructions_to_run.md)** — **Setup and Execution Manual** to launch the FastAPI Backend, Next.js Dashboard, and ML Ingestion Pipeline.
+*   **[description.md](file:///Users/keshav/garuda/GARUDA/description.md)** — **Comprehensive Project Description** detailing the problem, solution, model inventories, traceability matrix, and e-Challan dispute workflows.
+*   **[presentation.md](file:///Users/keshav/garuda/GARUDA/presentation.md)** — **Pitch Deck / Presentation Slides** with speaker notes and edge-hardware specs.
+*   **[free_deployment.md](file:///Users/keshav/garuda/GARUDA/free_deployment.md)** — **Cloud Deployment Guide** to host the entire stack online for free (Vercel, Render, Neon).
+*   **[BACKEND_REFERENCE.md](file:///Users/keshav/garuda/GARUDA/BACKEND_REFERENCE.md)** — **FastAPI Backend Developer's Reference** and API schemas.
+
+---
 
 ---
 *Team CodeKrafters | Flipkart Gridlock 3.0*
