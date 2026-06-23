@@ -13,6 +13,7 @@ export interface RawViolation {
   bbox: number[];
   metadata: Record<string, unknown>;
   plate_text?: string;
+  track_id?: number | null;
 }
 
 export interface RawVehicleInfo {
@@ -21,6 +22,7 @@ export interface RawVehicleInfo {
   plate_confidence: number;
   plate_valid: boolean;
   plate_state?: string;
+  track_id?: number | null;
 }
 
 export interface RawPlateDetection {
@@ -31,6 +33,7 @@ export interface RawPlateDetection {
   ocr_engine: string;
   state: string;
   is_valid: boolean;
+  track_id?: number | null;
 }
 
 export interface RawDriverAlert {
@@ -83,6 +86,9 @@ export interface JobSummary {
 export interface JobResult {
   job: JobSummary;
   records: PipelineRecord[];
+  video_url?: string | null;
+  demo_video_url?: string | null;
+  rendering_eta?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,12 +140,16 @@ export async function uploadSingle(opts: {
   sourceType: "Image" | "Video";
   file: File;
   cameraId?: string | null;
+  stopLineY?: number | null;
+  parkingTimer?: number | null;
   token?: string | null;
 }): Promise<JobSummary> {
   const formData = new FormData();
   formData.append("name", opts.name);
   formData.append("source_type", opts.sourceType);
   if (opts.cameraId) formData.append("camera_id", opts.cameraId);
+  if (opts.stopLineY !== undefined && opts.stopLineY !== null) formData.append("stop_line_y", String(opts.stopLineY));
+  if (opts.parkingTimer !== undefined && opts.parkingTimer !== null) formData.append("parking_timer", String(opts.parkingTimer));
   formData.append("file", opts.file, opts.file.name);
 
   const res = await fetch(`${getApiBase()}/jobs/upload`, {
@@ -259,9 +269,51 @@ export function aggregateRecords(records: PipelineRecord[]): StageAggregate {
   const ocrSet = new Set<string>();
   const typeMap = new Map<string, ViolationTypeAggregate>();
 
+  // Determine if this is a tracked video job by checking for valid track IDs
+  const isVideo = records.some(r => 
+    (r.vehicle?.track_id !== undefined && r.vehicle.track_id !== null) ||
+    (r.violations || []).some(v => v.track_id !== undefined && v.track_id !== null)
+  );
+
+  if (isVideo) {
+    const uniqueTrackIds = new Set<string | number>();
+    let maxPersonsInFrame = 0;
+    
+    for (const r of records) {
+      if (r.vehicle?.track_id !== undefined && r.vehicle.track_id !== null) {
+        uniqueTrackIds.add(r.vehicle.track_id);
+      }
+      for (const v of r.violations || []) {
+        const tId = v.track_id !== undefined && v.track_id !== null ? v.track_id : r.vehicle?.track_id;
+        if (tId !== undefined && tId !== null) {
+          uniqueTrackIds.add(tId);
+        }
+      }
+      for (const p of r.all_plates_detected || []) {
+        if (p.track_id !== undefined && p.track_id !== null) {
+          uniqueTrackIds.add(p.track_id);
+        }
+      }
+      
+      const pCount = r.processing?.persons_detected ?? 0;
+      if (pCount > maxPersonsInFrame) {
+        maxPersonsInFrame = pCount;
+      }
+    }
+    
+    agg.totalVehicles = uniqueTrackIds.size;
+    agg.totalPersons = maxPersonsInFrame;
+  } else {
+    for (const r of records) {
+      agg.totalVehicles += r.processing?.vehicles_detected ?? 0;
+      agg.totalPersons += r.processing?.persons_detected ?? 0;
+    }
+  }
+
+  // Set to map unique violations: (trackId, type) for video, or every violation for static/batch
+  const uniqueViolationsSet = new Set<string>();
+
   for (const r of records) {
-    agg.totalVehicles += r.processing?.vehicles_detected ?? 0;
-    agg.totalPersons += r.processing?.persons_detected ?? 0;
     agg.totalInferenceMs += r.processing?.inference_time_ms ?? 0;
     if (r.processing?.model) modelSet.add(r.processing.model);
     if (r.processing?.ocr_engine) ocrSet.add(r.processing.ocr_engine);
@@ -277,11 +329,29 @@ export function aggregateRecords(records: PipelineRecord[]): StageAggregate {
         agg.tracked = true;
       }
 
-      if (!typeMap.has(v.type)) typeMap.set(v.type, { type: v.type, count: 0, methods: {} });
-      const entry = typeMap.get(v.type)!;
-      entry.count += 1;
-      const key = method || "model";
-      entry.methods[key] = (entry.methods[key] || 0) + 1;
+      const tId = v.track_id !== undefined && v.track_id !== null ? v.track_id : r.vehicle?.track_id;
+      const trackKey = tId !== undefined && tId !== null ? String(tId) : `frame_${r.violation_id}`;
+      const vioKey = `${trackKey}_${v.type}`;
+
+      if (isVideo) {
+        // Video: count violation type only once per vehicle track ID
+        if (!uniqueViolationsSet.has(vioKey)) {
+          uniqueViolationsSet.add(vioKey);
+          
+          if (!typeMap.has(v.type)) typeMap.set(v.type, { type: v.type, count: 0, methods: {} });
+          const entry = typeMap.get(v.type)!;
+          entry.count += 1;
+          const key = method || "model";
+          entry.methods[key] = (entry.methods[key] || 0) + 1;
+        }
+      } else {
+        // Static/Batch: count every occurrence
+        if (!typeMap.has(v.type)) typeMap.set(v.type, { type: v.type, count: 0, methods: {} });
+        const entry = typeMap.get(v.type)!;
+        entry.count += 1;
+        const key = method || "model";
+        entry.methods[key] = (entry.methods[key] || 0) + 1;
+      }
     }
 
     for (const a of r.driver_state?.alerts || []) {
@@ -296,7 +366,6 @@ export function aggregateRecords(records: PipelineRecord[]): StageAggregate {
       });
     }
 
-    // Each item now produces 3 evidence files: raw, annotated, demo.
     agg.fileCount += [r.evidence?.raw_frame, r.evidence?.annotated_image, r.evidence?.demo_image]
       .filter(Boolean).length;
     if (!agg.evidenceFolder && r.evidence?.annotated_image) {

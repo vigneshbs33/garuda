@@ -699,6 +699,7 @@ class ViolationClassifier:
         # a plain mutable attribute, like stop_line_y, so callers can
         # re-point it per job/camera without reloading models.
         self.fps = fps if fps and fps > 0 else 30.0
+        self.parking_threshold_sec: float = 300.0
         self._signal_history: Deque[Tuple[str, float]] = deque(maxlen=self.SIGNAL_SMOOTHING_WINDOW)
         self._confirmed_signal_state = "unknown"
         # Frames since a light was last actually detected present. Used to
@@ -1518,7 +1519,7 @@ class ViolationClassifier:
                         results.append(v)
 
                     in_zone = self.is_in_no_parking_zone(vehicle.bbox)
-                    v = self.check_illegal_parking(vehicle, tid, is_stat, in_zone)
+                    v = self.check_illegal_parking(vehicle, tid, is_stat, in_zone, parking_threshold_sec=self.parking_threshold_sec)
                     if v:
                         results.append(v)
 

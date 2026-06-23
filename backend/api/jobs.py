@@ -195,6 +195,9 @@ class JobResultResponse(BaseModel):
     one job_id. Powers the Evidence page's step-by-step view."""
     job: JobResponse
     records: List[dict]
+    video_url: Optional[str] = None
+    demo_video_url: Optional[str] = None
+    rendering_eta: Optional[float] = None
 
 
 class ViolationInJobResponse(BaseModel):
@@ -418,6 +421,7 @@ def _classify_and_package(
                 "state": ocr_result.state_name,
                 "is_valid": ocr_result.is_valid,
                 "plate_crop": p_crop,
+                "track_id": veh.track_id if hasattr(veh, "track_id") else None,
             })
 
     # Violation classification — runs once for the whole image (pass full
@@ -461,7 +465,7 @@ def _classify_and_package(
     elif all_plates:
         best_plate = max(all_plates, key=lambda p: p["confidence"])
     else:
-        best_plate = {"plate_text": "UNCLEAR", "confidence": 0.0, "vehicle_class": "unknown", "is_valid": False, "state": "Unknown", "plate_crop": None}
+        best_plate = {"plate_text": "UNCLEAR", "confidence": 0.0, "vehicle_class": "unknown", "is_valid": False, "state": "Unknown", "plate_crop": None, "track_id": None}
 
     best_plate_crop = best_plate.get("plate_crop")
 
@@ -475,9 +479,11 @@ def _classify_and_package(
         v_tier = 1 if v.confidence >= TIER1_AUTO_CHALLAN else 2
         # Match vehicle by bbox to assign its specific plate
         v_plate = "UNCLEAR"
+        v_track_id = None
         for p in all_plates:
             if p["bbox"] == list(map(int, v.bbox)):
                 v_plate = p["plate_text"]
+                v_track_id = p["track_id"]
                 break
         violation_dicts.append({
             "type": v_type_display,
@@ -489,6 +495,7 @@ def _classify_and_package(
             "tier": v_tier,
             "review_status": "auto_confirmed" if v_tier == 1 else "pending",
             "plate_text": v_plate,
+            "track_id": v_track_id,
         })
 
     # Record-level tier/action reflects the WORST case across all violations
@@ -529,6 +536,7 @@ def _classify_and_package(
             "plate_confidence": best_plate["confidence"],
             "plate_valid": best_plate.get("is_valid", False),
             "plate_state": best_plate.get("state", "Unknown"),
+            "track_id": best_plate.get("track_id"),
         },
         "violations": violation_dicts,
         "all_plates_detected": all_plates,
@@ -555,6 +563,8 @@ def _classify_and_package(
         "vehicle_class": best_plate.get("vehicle_class", "unknown"),
         "tier": tier,
         "status": "passed" if not violations else "pending",
+        "annotated_frame": annotated_img,
+        "demo_frame": demo_img,
     }]
 
 
@@ -747,8 +757,10 @@ def _run_ml_on_batch(
 # ML inference per frame (see _run_ml_on_image benchmark), processing every
 # frame of even a short clip would take minutes. MAX_VIDEO_FRAMES bounds total
 # processing time on CPU for a single upload to under a minute.
-VIDEO_SAMPLE_FPS = 1.0
-MAX_VIDEO_FRAMES = 40
+# Sample at 6.0 fps to match ws_video_render output frame rate
+VIDEO_SAMPLE_FPS = 6.0
+MAX_VIDEO_FRAMES = 180
+MAX_RENDER_SOURCE_SECONDS = 120.0
 
 
 def _run_ml_on_video(
@@ -756,20 +768,18 @@ def _run_ml_on_video(
     job_id: str,
     filename: str,
     calibration: Optional[dict] = None,
+    progress_callback = None,
 ):
     """
     Decode a video file, sample frames, and run the full ML pipeline on each
-    — with a persistent VehicleTracker across sampled frames so stop-line/
-    red-light/wrong-side/illegal-parking get real velocity/duration history
-    instead of degrading to the single-frame static fallback on every frame.
-
-    Returns (violation records, frames actually processed).
+    — with a persistent VehicleTracker and rendering of Demo and Annotated outputs.
     """
     if not _ensure_ml() or not ml_available:
         logger.warning("ML pipeline not available — skipping video job %s", job_id)
         return [], 0
 
     from ml.pipeline.tracker import VehicleTracker
+    from collections import defaultdict
 
     calibration = calibration or _DEFAULT_CALIBRATION
     _apply_calibration(calibration)
@@ -783,6 +793,13 @@ def _run_ml_on_video(
     tracker = VehicleTracker(stop_line_y=calibration["stop_line_y"])
     first_sampled_frame = True
 
+    out_dir = "evidence/video"
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = f"{out_dir}/{job_id}_annotated.mp4"
+    demo_out_path = f"{out_dir}/{job_id}_demo.mp4"
+    writer = None
+    demo_writer = None
+
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(file_bytes)
@@ -794,24 +811,35 @@ def _run_ml_on_video(
             return [], 0
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        sample_interval = max(1, round(fps / VIDEO_SAMPLE_FPS))
-        # The tracker only sees one update per sampled frame, so the rate
-        # that matters for the classifier's crossing/velocity windows is the
-        # sampling rate (VIDEO_SAMPLE_FPS), not the source video's native fps.
-        ml_classifier.fps = VIDEO_SAMPLE_FPS
+        total_src_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        output_fps = min(fps, VIDEO_SAMPLE_FPS)
+        sample_interval = max(1, round(fps / output_fps))
+        max_src_frames = min(total_src_frames, int(MAX_RENDER_SOURCE_SECONDS * fps)) if total_src_frames else 0
+
+        # Adjust classifier fps to output_fps for correct velocity tracking
+        ml_classifier.fps = output_fps
+
+        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), output_fps, (width, height))
+        demo_writer = cv2.VideoWriter(demo_out_path, cv2.VideoWriter_fourcc(*"mp4v"), output_fps, (width, height))
 
         frame_idx = 0
+        t_start_loop = time.perf_counter()
+        expected_total = (max_src_frames // sample_interval) if max_src_frames else 0
+
         while frames_processed < MAX_VIDEO_FRAMES:
+            if max_src_frames and frame_idx >= max_src_frames:
+                break
             ret, frame = cap.read()
             if not ret:
                 break
+
             if frame_idx % sample_interval == 0:
                 t_start = time.perf_counter()
                 processed = ml_preprocessor.preprocess(frame, is_video=True)
 
-                # persist=False on the first sampled frame resets ByteTrack
-                # state so IDs don't leak in from a previous, unrelated job
-                # that shares the same VehicleDetector singleton.
                 detections = ml_detector.detect_with_tracking(processed, persist=not first_sampled_frame)
                 first_sampled_frame = False
                 tracker.update(detections, frame_idx)
@@ -825,24 +853,44 @@ def _run_ml_on_video(
                     detections, vehicles, persons,
                     tracker_states=tracker_states,
                     calibrated=calibration["calibrated"],
-                    enable_motion_violations=True,  # real video — all violations checked
+                    enable_motion_violations=True,
                 )
+
                 for r in frame_results:
                     (passed_results if r["status"] == "passed" else violation_results).append(r)
+
+                if frame_results:
+                    r = frame_results[0]
+                    # Write to video streams
+                    if "annotated_frame" in r and r["annotated_frame"] is not None:
+                        writer.write(r["annotated_frame"])
+                    if "demo_frame" in r and r["demo_frame"] is not None:
+                        demo_writer.write(r["demo_frame"])
+
                 frames_processed += 1
+
+                if progress_callback and expected_total:
+                    elapsed = time.perf_counter() - t_start_loop
+                    rate = frames_processed / elapsed if elapsed > 0 else 0
+                    remaining = max(0, expected_total - frames_processed)
+                    eta = remaining / rate if rate > 0 else None
+                    percent = min(99.9, (frames_processed / expected_total) * 100)
+                    progress_callback(percent, eta)
+
             frame_idx += 1
 
         cap.release()
     except Exception as e:
         logger.error("ML inference error in video job %s: %s", job_id, e, exc_info=True)
     finally:
+        if writer is not None:
+            writer.release()
+        if demo_writer is not None:
+            demo_writer.release()
+        if cap is not None:
+            cap.release()
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
-
-    logger.info(
-        "Job %s | Video %s | sampled %d frames, %d violations found",
-        job_id, filename, frames_processed, len(violation_results)
-    )
 
     # Keep every real violation found across the whole video; collapse an
     # all-compliant video down to one representative "passed" record instead
@@ -862,6 +910,8 @@ async def run_job_pipeline(
     source_type: str = "Image",
     camera_id: Optional[str] = None,
     batch_files: Optional[List[tuple]] = None,  # [(bytes, filename), ...] for source_type="Batch"
+    stop_line_y: Optional[int] = None,
+    parking_timer: Optional[int] = None,
 ):
     """Real ML inference pipeline for batch upload jobs."""
     start = datetime.utcnow()
@@ -876,12 +926,31 @@ async def run_job_pipeline(
                     setattr(job, k, v)
                 await session.commit()
 
+    async def _update_progress(percent: float, eta: Optional[float]):
+        async with AsyncSessionLocal() as session:
+            job = (await session.execute(
+                select(JobModel).where(JobModel.id == job_id)
+            )).scalar_one_or_none()
+            if job:
+                scaled_pct = int(10 + (percent / 100.0) * 60.0)  # scale loop from 10 to 70
+                job.progress = scaled_pct
+                try:
+                    summary = json.loads(job.result_summary or "{}")
+                except Exception:
+                    summary = {}
+                summary["rendering_eta"] = eta
+                job.result_summary = json.dumps(summary, default=str)
+                await session.commit()
+
     await _update_job(status="Processing", progress=10)
 
     # Resolve this job's camera calibration once, here in the async context
-    # (DB access), then hand the plain dict to the sync ML functions running
-    # in the thread pool below — keeps DB I/O off the executor thread.
     calibration = await _resolve_calibration(camera_id)
+    if stop_line_y is not None:
+        calibration["stop_line_y"] = stop_line_y
+        calibration["calibrated"] = True
+    if parking_timer is not None:
+        calibration["parking_timer"] = parking_timer
 
     violations_created = []
     frames_processed = 0
@@ -898,8 +967,14 @@ async def run_job_pipeline(
                 frames_processed = len(batch_files)
             elif source_type.lower() == "video":
                 await _update_job(progress=20)
+
+                def progress_cb(percent: float, eta: Optional[float]):
+                    loop.call_soon_threadsafe(
+                        lambda: asyncio.create_task(_update_progress(percent, eta))
+                    )
+
                 violations_created, frames_processed = await loop.run_in_executor(
-                    None, _run_ml_on_video, file_bytes, job_id, filename, calibration
+                    None, _run_ml_on_video, file_bytes, job_id, filename, calibration, progress_cb
                 )
             else:
                 # Decode image
@@ -920,13 +995,7 @@ async def run_job_pipeline(
 
             await _update_job(progress=70)
 
-            # Save only genuine violations to DB — compliant images contribute
-            # nothing to the violation registry. One image's record carries every
-            # violation found in it (e.g. helmet + triple riding on the same
-            # frame) and becomes ONE clubbed citation row — not one row per
-            # violation — since an officer reviews the whole image at once, not
-            # each bounding box in isolation. save_violation() rolls the list up
-            # into one summary (joined types, total fine, worst severity).
+            # Save only genuine violations to DB
             violation_count = 0
             for v_data in violations_created:
                 record = v_data["record"]
@@ -943,13 +1012,39 @@ async def run_job_pipeline(
                 except Exception as e:
                     logger.error("Failed to save violation record: %s", e)
 
-            # Full, uncollapsed real-pipeline breakdown for every item processed —
-            # this is what the Evidence page reads via GET /jobs/{job_id}/result,
-            # independent of the (intentionally lossier) violations table above.
+            # Full, uncollapsed real-pipeline breakdown for every item processed
             result_summary = json.dumps(
                 {"records": [v_data["record"] for v_data in violations_created]},
                 default=str,
             )
+
+            # Update DB with result summary immediately so user can see it
+            await _update_job(
+                progress=75,
+                violations_found=violation_count,
+                result_summary=result_summary,
+            )
+
+            # If video, transcode to H.264 browser format
+            if source_type.lower() == "video":
+                out_path = f"evidence/video/{job_id}_annotated.mp4"
+                demo_out_path = f"evidence/video/{job_id}_demo.mp4"
+
+                from .stream import _reencode_to_browser_h264
+
+                await _update_job(progress=80)
+                await loop.run_in_executor(None, _reencode_to_browser_h264, out_path)
+                await _update_job(progress=90)
+                await loop.run_in_executor(None, _reencode_to_browser_h264, demo_out_path)
+
+            # Re-generate result summary to include final video URLs
+            summary_dict = {"records": [v_data["record"] for v_data in violations_created]}
+            if source_type.lower() == "video":
+                summary_dict["video_url"] = f"/evidence/video/{job_id}_annotated.mp4"
+                summary_dict["demo_video_url"] = f"/evidence/video/{job_id}_demo.mp4"
+                summary_dict["rendering_eta"] = 0
+
+            result_summary = json.dumps(summary_dict, default=str)
 
             elapsed = max(1, int((datetime.utcnow() - start).total_seconds()))
             await _update_job(
@@ -1029,6 +1124,8 @@ async def upload_job(
     name: str = Form(...),
     source_type: str = Form("Image"),
     camera_id: Optional[str] = Form(None),
+    stop_line_y: Optional[int] = Form(None),
+    parking_timer: Optional[int] = Form(None),
     file: UploadFile = File(...),
 ):
     """Upload a single image/video file and run ML inference pipeline in the background.
@@ -1058,7 +1155,9 @@ async def upload_job(
     file_bytes = await file.read()
     filename = file.filename or name
 
-    background_tasks.add_task(run_job_pipeline, job_id, file_bytes, filename, source_type, camera_id)
+    background_tasks.add_task(
+        run_job_pipeline, job_id, file_bytes, filename, source_type, camera_id, None, stop_line_y, parking_timer
+    )
     logger.info("Job %s queued for ML inference on file: %s (%d bytes)", job_id, filename, len(file_bytes))
     return JobResponse.model_validate(job)
 
@@ -1123,8 +1222,7 @@ async def get_job_result(job_id: str, db: AsyncSession = Depends(get_db)):
     """
     Full, uncollapsed real-pipeline breakdown for this job — every image's
     or sampled frame's record (violation or compliant), clubbed under this
-    one job_id. This is what the Evidence page renders; unlike
-    /jobs/{job_id}/violations, nothing here is filtered out or collapsed.
+    one job_id.
     """
     job = (
         await db.execute(select(JobModel).where(JobModel.id == job_id))
@@ -1132,12 +1230,25 @@ async def get_job_result(job_id: str, db: AsyncSession = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+    video_url = None
+    demo_video_url = None
+    rendering_eta = None
     try:
-        records = json.loads(job.result_summary or "{}").get("records", [])
+        summary_dict = json.loads(job.result_summary or "{}")
+        records = summary_dict.get("records", [])
+        video_url = summary_dict.get("video_url")
+        demo_video_url = summary_dict.get("demo_video_url")
+        rendering_eta = summary_dict.get("rendering_eta")
     except (json.JSONDecodeError, AttributeError):
         records = []
 
-    return JobResultResponse(job=JobResponse.model_validate(job), records=records)
+    return JobResultResponse(
+        job=JobResponse.model_validate(job),
+        records=records,
+        video_url=video_url,
+        demo_video_url=demo_video_url,
+        rendering_eta=rendering_eta
+    )
 
 
 @router.get("/{job_id}/violations", response_model=List[ViolationInJobResponse])
