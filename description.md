@@ -135,7 +135,27 @@ If you wish to contest this violation, you may present your evidence at your loc
 
 ---
 
-## 🔮 6. Future Scope & Roadmap (Under Development)
+## ⚖️ 6. Dubai-Style Automated Fast Challan & Citizen Dispute System
+
+GARUDA implements a fast, automated enforcement flow inspired by modern smart cities like Dubai, while maintaining a clear and accessible grievance redressal mechanism for citizens to appeal incorrect tickets.
+
+### A. The Fast Ingestion & Alert Flow
+1. **Edge Detection:** The camera edge node detects a traffic violation and reads the license plate characters.
+2. **Instant Ingestion:** Detections with high visual confidence (`≥ 90%` - Tier 1) bypass manual screening and are POSTed to the backend endpoint `/api/v1/violations/ingest` with `status` set to `auto_challan`.
+3. **SMS Blast:** The backend immediately triggers the Alert Service (`backend/core/alert_service.py`), dispatching an automated SMS/WhatsApp challan to the registered offender's phone within seconds of the offense. The message includes the violation details, fine amount, and a unique URL pointing to their evidence package.
+
+### B. Citizen Appeal & Dispute Resolution
+To protect citizens from false accusations (such as occlusions, emergency maneuver, or OCR plate mismatches), the platform features a transparent appeal workflow:
+1. **Accessing Proof:** The offender clicks the unique link in their SMS, opening a secure web portal (served by Next.js) showing the **Annotated Image Evidence** with bounding boxes, timestamps, and severity flags.
+2. **Filing a Grievance:** If the driver believes they were not in violation (e.g. emergency avoidance, license plate misread), they can click **"Dispute Challan"** on the portal and upload their explanation (or dashboard camera video).
+3. **Status Promotion:** Filing a dispute updates the ticket's database status to `pending` and places it in the **Officer Manual Review Queue** on the Next.js console.
+4. **Officer Override (Human-in-the-Loop):** A reviewing officer analyzes the citizen's appeal alongside the high-resolution evidence. 
+   * **Approved (`POST /violations/{id}/confirm`):** If the violation is correct, the officer confirms it, locking the ticket status to `confirmed`.
+   * **Rejected (`POST /violations/{id}/reject`):** If the AI made a mistake, the officer rejects it, transitioning the ticket status to `rejected`. This immediately cancels the e-Challan, deletes the fine, and adds the incorrect sample to the local federated learning cache to train the system against similar future errors.
+
+---
+
+## 🔮 7. Future Scope & Roadmap (Under Development)
 
 The following roadmap items represent features currently under active development or scheduled for production scaling:
 
@@ -147,7 +167,7 @@ The following roadmap items represent features currently under active developmen
 
 ---
 
-## ⚙️ 7. Key Environment Variables (`.env`)
+## ⚙️ 8. Key Environment Variables (`.env`)
 
 | Variable Name | Default / Example Value | Purpose |
 | :--- | :--- | :--- |
