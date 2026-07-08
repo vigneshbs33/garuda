@@ -186,6 +186,28 @@ class AuditLogModel(Base):
     details   : Mapped[str]  = mapped_column(String, default="")
 
 
+class RoadHazardModel(Base):
+    """Stores every road hazard detection from the ML pipeline."""
+    __tablename__ = "road_hazards"
+
+    id                    : Mapped[int]           = mapped_column(Integer, primary_key=True, autoincrement=True)
+    camera_id             : Mapped[str]           = mapped_column(String, index=True, default="")
+    location              : Mapped[str]           = mapped_column(String, default="")
+    lat                   : Mapped[float]         = mapped_column(Float,   default=0.0)
+    lon                   : Mapped[float]         = mapped_column(Float,   default=0.0)
+    timestamp             : Mapped[str]           = mapped_column(String, index=True,
+                                                    default=lambda: datetime.utcnow().isoformat())
+    damage_type           : Mapped[str]           = mapped_column(String, default="none")
+    damage_severity_score : Mapped[float]         = mapped_column(Float,   default=0.0)
+    road_health_score     : Mapped[float]         = mapped_column(Float,   default=100.0)
+    deterioration_rate    : Mapped[float]         = mapped_column(Float,   default=0.0)
+    predicted_critical_at : Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    alert_fired           : Mapped[bool]          = mapped_column(Boolean, default=False)
+    frame_path            : Mapped[str]           = mapped_column(String, default="")
+    bbox_json             : Mapped[str]           = mapped_column(Text,   default="[]")
+    area_px               : Mapped[float]         = mapped_column(Float,   default=0.0)
+
+
 # ---------------------------------------------------------------------------
 # Init / teardown
 # ---------------------------------------------------------------------------
@@ -222,6 +244,14 @@ async def init_db() -> None:
         await _add_missing_columns(conn, "processing_jobs", {
             "camera_id":      "VARCHAR",
             "result_summary": "TEXT DEFAULT '{}'",
+        })
+        await _add_missing_columns(conn, "road_hazards", {
+            "deterioration_rate":    "REAL DEFAULT 0.0",
+            "predicted_critical_at": "VARCHAR",
+            "alert_fired":           "INTEGER DEFAULT 0",
+            "frame_path":            "VARCHAR DEFAULT ''",
+            "bbox_json":             "TEXT DEFAULT '[]'",
+            "area_px":               "REAL DEFAULT 0.0",
         })
     logger.info("Database initialised: %s", db_url)
 

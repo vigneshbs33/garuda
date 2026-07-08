@@ -54,6 +54,7 @@ export default function LayoutShell({ children }: LayoutShellProps) {
     { name: "Human Check", href: "/review", icon: <ShieldIcon size={16} /> },
     { name: "Upload Evidence", href: "/evidence", icon: <UploadIcon size={16} /> },
     { name: "AI Assistant", href: "/agent", icon: <BotIcon size={16} /> },
+    { name: "🛣️ Road Hazards", href: "/hazards", icon: <span style={{fontSize:16}}>🛣️</span> },
     { name: "Analytics", href: "/analytics", icon: <ChartIcon size={16} /> },
     { name: "Settings", href: "/settings", icon: <SettingsIcon size={16} /> },
   ];

@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core.config import get_settings
 from .core.database import init_db, close_db
-from .api import violations, cameras, vehicles, analytics, stream, debug, auth, jobs, reviews, evidence, users, audit_logs, agent
+from .api import violations, cameras, vehicles, analytics, stream, debug, auth, jobs, reviews, evidence, users, audit_logs, agent, hazards
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -116,6 +116,7 @@ app.include_router(evidence.router,   prefix=API_PREFIX, tags=["Evidence"])
 app.include_router(users.router,      prefix=API_PREFIX, tags=["Users"])
 app.include_router(audit_logs.router, prefix=API_PREFIX, tags=["Audit Logs"])
 app.include_router(agent.router,      prefix=API_PREFIX, tags=["Command Search"])
+app.include_router(hazards.router,    prefix=API_PREFIX, tags=["Road Hazards"])
 
 # Serve evidence images as static files
 import os

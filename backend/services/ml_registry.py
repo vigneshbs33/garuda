@@ -46,6 +46,8 @@ WEIGHTS = {
     "plate_stage2":    _WEIGHTS_ROOT / "ocr"         / "plate_yasir.pt",
     # plate detector — moin's YOLOv8 (second fallback)
     "plate_moin":      _WEIGHTS_ROOT / "ocr"         / "plate_yolov8_moin.pt",
+    # --- Road Hazard Intelligence ---
+    "road_damage":     _WEIGHTS_ROOT / "hazards"     / "yolo12s_RDD2022_best.pt",
 }
 
 
@@ -99,6 +101,7 @@ class MLRegistry:
     classifier: Any = None
     driver_state: Any = None
     visualizer: Any = None
+    road_hazard_classifier: Any = None    # RoadHazardClassifier instance
     error: str = ""
 
 
@@ -147,6 +150,16 @@ def _load_registry() -> MLRegistry:
         )
         reg.driver_state  = DriverStateDetector()
         reg.visualizer    = FrameVisualizer()
+
+        # Road hazard classifier (gracefully disabled if weights missing)
+        from ml.pipeline.road_hazard_classifier import RoadHazardClassifier
+        road_damage_path = _resolve("road_damage")
+        reg.road_hazard_classifier = RoadHazardClassifier(model_path=road_damage_path)
+        if reg.road_hazard_classifier.available:
+            logger.info("MLRegistry: road hazard classifier loaded from %s", road_damage_path)
+        else:
+            logger.warning("MLRegistry: road hazard model missing — hazard features disabled")
+
         reg.available     = True
         logger.info("MLRegistry: all components loaded successfully.")
 
