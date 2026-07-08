@@ -1,6 +1,6 @@
-# 🦅 GARUDA — Gridlock Guardian Backend
+# 🦅 GARUDA — Backend Reference
 **Next-Generation Edge-Native Automated Traffic Enforcement**
-*(Flipkart Gridlock 3.0 Submission)*
+*(BOSCH-BMU Innovation Challenge)*
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.103+-009688.svg)
@@ -139,7 +139,7 @@ Real Indian traffic video results. Each row shows the **raw camera input stream*
 
 ## 📋 Problem Statement Walkthrough & Code Traceability
 
-Below is the traceability matrix mapping requirements from the Flipkart Gridlock problem statement (`ps.txt`) directly to their corresponding implementations in the codebase:
+Below is the traceability matrix mapping requirements from the problem statement directly to their corresponding implementations in the codebase:
 
 | ps.txt Requirement | Status | Feature & Implementation Details | Codebase Reference (File Scheme) |
 | :--- | :---: | :--- | :--- |
@@ -792,4 +792,4 @@ The vanilla frontend (`frontend/`) is intentionally simple. To migrate to React/
 
 - **ML & Backend Lead**: Vignesh
 - **Frontend & UX Lead**: GARUDA Team
-- **Documentation**: `BACKEND_REFERENCE.md` — Active living document for the Gridlock 3.0 submission.
+- **Documentation**: `BACKEND_REFERENCE.md` — Active living document for the submission.

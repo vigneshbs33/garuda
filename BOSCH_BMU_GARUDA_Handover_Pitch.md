@@ -2,7 +2,7 @@
 ## Pitch & Developer Handover Document (BOSCH-BMU Innovation Challenge)
 
 > **Prepared For**: BOSCH-BMU Innovation Challenge Pitch (July 8, 2026 @ 12:00 PM)  
-> **Project path**: `d:\vignesh\files\Personal\Hackthon\flipkart_Gridlock2\GARUDA`  
+> **Project path**: `cd /path/to/GARUDA`  
 > **Last verified**: 2026-07-08 — All imports pass, all API routes live  
 
 ---
@@ -146,14 +146,14 @@ Camera / Uploaded Image (Zero-Cost Infrastructure)
 
 ### Start Backend
 ```powershell
-cd d:\vignesh\files\Personal\Hackthon\flipkart_Gridlock2\GARUDA
+cd /path/to/GARUDA
 uvicorn backend.main:app --reload --port 8000
 ```
 *(Ensure `yolo12s_RDD2022_best.pt` is present in `ml/models/weights/hazards/`)*
 
 ### Start Frontend
 ```powershell
-cd d:\vignesh\files\Personal\Hackthon\flipkart_Gridlock2\GARUDA
+cd /path/to/GARUDA
 npm run dev
 ```
 Open: **http://localhost:3000/hazards**
