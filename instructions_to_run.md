@@ -88,6 +88,7 @@ The Next.js dashboard provides a live command center to monitor cameras, review 
    ```bash
    cd /Users/keshav/garuda/GARUDA
    npm install
+   npm install leaflet react-leaflet @types/leaflet --save
    ```
 2. **Start the Frontend Development Server:**
    Launch Next.js in development mode:
@@ -96,7 +97,8 @@ The Next.js dashboard provides a live command center to monitor cameras, review 
    ```
 3. **Access the Dashboard:**
    Open your browser and navigate to:
-   **`http://localhost:3000`**
+   * **Traffic Control Center:** `http://localhost:3000`
+   * **BOSCH Road Hazard Intelligence Dashboard:** `http://localhost:3000/hazards`
    *(Note: The frontend is configured to automatically discover the backend API at `https://localhost:8000` using your browser's current network interface).*
 
 ---
